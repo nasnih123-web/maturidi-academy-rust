@@ -1,11 +1,13 @@
 {
-  "case": "voice.ask stays proxied (needs the STT sidecar first)",
+  "case": "voice.ask is a sidecar-contract route (needs the STT sidecar first)",
   "auth": "bearer",
   "method": "POST",
   "path": "/api/v1/voice/ask",
   "body": "<multipart audio>",
-  "expected_status": 502,
+  "expected_status": 503,
   "expected": {
-    "status": "bad_gateway"
+    "error": {
+      "code": "voice_stt_unavailable"
+    }
   }
 }

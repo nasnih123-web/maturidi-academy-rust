@@ -1,11 +1,13 @@
 {
-  "case": "voice.transcribe stays proxied (no STT in the Rust binary)",
+  "case": "voice.transcribe is a sidecar-contract route (no STT in the Rust binary)",
   "auth": "bearer",
   "method": "POST",
   "path": "/api/v1/voice/transcribe",
   "body": "<multipart audio>",
-  "expected_status": 502,
+  "expected_status": 503,
   "expected": {
-    "status": "bad_gateway"
+    "error": {
+      "code": "voice_stt_unavailable"
+    }
   }
 }
