@@ -23,7 +23,8 @@ Notes pinned by the cases:
   created without it defaults to `content_type=page` and does not
   appear in the list (it is still served by slug).
 - `POST /api/v1/fatwa/ask` is intentionally NOT native (assistant /
-  mufti, out of scope for Wave 3) and stays proxied.
+  mufti, out of scope for Wave 3) — it was proxied in Wave 3; since
+  Wave 8 it is a sidecar-contract route (ADR-134).
 - Python has no HTTP route to approve a quiz question, so
   `POST /api/v1/fatwa/quiz/generate` answers 404
   `no_quiz_questions` until a question is approved out-of-band.
