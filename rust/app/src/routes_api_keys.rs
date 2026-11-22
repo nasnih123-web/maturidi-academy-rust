@@ -82,9 +82,13 @@ fn key_from_row(row: &DynRow) -> Result<ApiKeyRow, ApiError> {
         name: row.try_get("name")?,
         key_prefix: row.try_get("key_prefix")?,
         scopes,
-        rate_limit_per_min: row.try_get("rate_limit_per_min")?,
-        quota_monthly: row.try_get("quota_monthly")?,
-        used_this_month: row.try_get("used_this_month")?,
+        // INTEGER columns read as i32 (ADR-028): sqlx cannot decode
+        // Postgres int4 as i64, so read i32 and widen here. (Wave 7
+        // widgets exposed this: `validate_key` 500'd on Postgres
+        // while passing on sqlite.)
+        rate_limit_per_min: row.try_get::<i32, _>("rate_limit_per_min")? as i64,
+        quota_monthly: row.try_get::<i32, _>("quota_monthly")? as i64,
+        used_this_month: row.try_get::<i32, _>("used_this_month")? as i64,
         quota_period: row.try_get("quota_period")?,
         is_active: row.try_get("is_active")?,
         abuse_flag: row.try_get("abuse_flag")?,

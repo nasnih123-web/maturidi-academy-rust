@@ -21,7 +21,7 @@ use std::{
 
 use axum::{
     body::Body,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::{Request, Response, StatusCode},
     response::{IntoResponse, Json},
     routing::{delete, get, patch, post, put},
@@ -36,6 +36,9 @@ mod adhan;
 mod audit;
 mod auth_service;
 mod authn;
+mod calc_decimal;
+mod calc_engines;
+mod calc_mosaref;
 mod captcha;
 mod countries;
 mod crypto;
@@ -53,21 +56,29 @@ mod quran_data;
 mod quran_providers;
 mod ratelimit;
 mod routes_activity;
+mod routes_admin;
+mod routes_admin_content;
 mod routes_api_keys;
 mod routes_articles;
 mod routes_auth;
 mod routes_calculators;
 mod routes_content;
 mod routes_fatwa;
+mod routes_finance;
 mod routes_hifz;
 mod routes_home;
 mod routes_library;
 mod routes_lms;
 mod routes_meta;
+mod routes_places;
 mod routes_quran;
+mod routes_social;
+mod routes_sync;
+mod routes_telegram;
 mod routes_users;
 mod routes_videos;
 mod routes_voice;
+mod routes_widgets;
 mod settings;
 mod storage;
 mod subtitles;
@@ -593,6 +604,68 @@ pub fn build_router(state: AppState) -> Router {
                 get(routes_content::public_calendar_theme),
             );
     }
+    if unit_native("ADMIN_CONTENT") {
+        router = router
+            .route(
+                "/api/v1/admin/content/adapters",
+                get(routes_admin_content::list_adapters),
+            )
+            .route(
+                "/api/v1/admin/content/items",
+                get(routes_admin_content::list_items),
+            )
+            .route(
+                "/api/v1/admin/content/items/{domain}/{content_type}/{item_id}",
+                get(routes_admin_content::get_item_detail),
+            )
+            .route(
+                "/api/v1/admin/content/bulk",
+                post(routes_admin_content::bulk_action),
+            )
+            .route(
+                "/api/v1/admin/content/placements",
+                get(routes_admin_content::list_placements)
+                    .put(routes_admin_content::upsert_placement_route),
+            )
+            .route(
+                "/api/v1/admin/content/placements/{placement_id}",
+                delete(routes_admin_content::delete_placement)
+                    .patch(routes_admin_content::patch_placement),
+            )
+            .route(
+                "/api/v1/admin/content/distribution",
+                get(routes_admin_content::get_distribution)
+                    .put(routes_admin_content::set_distribution),
+            )
+            .route(
+                "/api/v1/admin/content/calendar",
+                get(routes_admin_content::calendar_feed),
+            )
+            .route(
+                "/api/v1/admin/content/items/{domain}/{content_type}/{item_id}/transition",
+                post(routes_admin_content::transition_item),
+            )
+            .route(
+                "/api/v1/admin/content/placements/reorder",
+                post(routes_admin_content::reorder_placements),
+            )
+            .route(
+                "/api/v1/admin/content/items/{domain}/{content_type}/{item_id}/distribution",
+                patch(routes_admin_content::set_distribution_policy),
+            )
+            .route(
+                "/api/v1/admin/content/audit",
+                get(routes_admin_content::audit_feed),
+            )
+            .route(
+                "/api/v1/admin/content/ai-sources",
+                get(routes_admin_content::list_ai_sources),
+            )
+            .route(
+                "/api/v1/admin/content/ai-sources/{domain}/{content_type}/{item_id}/reindex",
+                post(routes_admin_content::reindex_ai_source),
+            );
+    }
     if unit_native("QURAN") {
         router = router
             .route("/api/v1/quran/surahs", get(routes_quran::list_surahs))
@@ -797,6 +870,127 @@ pub fn build_router(state: AppState) -> Router {
                 post(routes_hifz::data_purge),
             );
     }
+    if unit_native("PLACES") {
+        router = router
+            .route("/api/v1/places", get(routes_places::list_public_places))
+            .route(
+                "/api/v1/places/submissions",
+                post(routes_places::submit_place),
+            )
+            .route(
+                "/api/v1/places/{place_id}",
+                get(routes_places::get_public_place),
+            )
+            .route(
+                "/api/v1/admin/places",
+                get(routes_places::admin_list_places).post(routes_places::admin_create_place),
+            )
+            .route(
+                "/api/v1/admin/places/{place_id}",
+                get(routes_places::admin_get_place)
+                    .patch(routes_places::admin_update_place)
+                    .delete(routes_places::admin_delete_place),
+            )
+            .route(
+                "/api/v1/admin/places/{place_id}/transition",
+                post(routes_places::admin_transition_place),
+            );
+    }
+    if unit_native("WIDGETS") {
+        router = router
+            .route(
+                "/api/v1/widgets/prayer-times",
+                get(routes_widgets::prayer_times),
+            )
+            .route(
+                "/api/v1/widgets/ayah-of-day",
+                get(routes_widgets::ayah_of_day),
+            )
+            .route(
+                "/api/v1/widgets/latest-fatwa",
+                get(routes_widgets::latest_fatwa),
+            )
+            .route(
+                "/api/v1/widgets/zakat-mini",
+                get(routes_widgets::zakat_mini),
+            );
+    }
+    if unit_native("SYNC") {
+        router = router
+            .route("/api/v1/sync/push", post(routes_sync::push_batch))
+            .route("/api/v1/sync/pull", get(routes_sync::pull_changes))
+            .route("/api/v1/sync/cursor", get(routes_sync::get_cursor))
+            .route("/api/v1/sync/devices", get(routes_sync::list_devices))
+            .route("/api/v1/sync/conflicts", get(routes_sync::list_conflicts))
+            .route(
+                "/api/v1/sync/conflicts/{conflict_id}/resolve",
+                post(routes_sync::resolve_conflict),
+            )
+            .route("/api/v1/sync/offline-pack", get(routes_sync::offline_pack));
+    }
+    if unit_native("TELEGRAM") {
+        router = router
+            .route(
+                "/api/v1/telegram/webhook",
+                post(routes_telegram::telegram_webhook),
+            )
+            .route(
+                "/api/v1/telegram/status/public",
+                get(routes_telegram::bot_status),
+            )
+            .route(
+                "/api/v1/telegram/connect/request-code",
+                post(routes_telegram::connect_request_code),
+            )
+            .route(
+                "/api/v1/telegram/connect/confirm-code",
+                post(routes_telegram::connect_confirm_code),
+            )
+            .route(
+                "/api/v1/telegram/connect/status",
+                get(routes_telegram::connect_status_handler),
+            )
+            .route(
+                "/api/v1/telegram/connect/disconnect",
+                post(routes_telegram::connect_disconnect),
+            )
+            .route(
+                "/api/v1/telegram/import",
+                post(routes_telegram::import_channel),
+            )
+            .route(
+                "/api/v1/telegram/distribute/policies",
+                get(routes_telegram::list_policies),
+            )
+            .route(
+                "/api/v1/telegram/distribute/policies/{content_type}",
+                put(routes_telegram::set_policy),
+            )
+            .route(
+                "/api/v1/telegram/distribute/publish",
+                post(routes_telegram::request_publish),
+            )
+            .route(
+                "/api/v1/telegram/distribute/log",
+                get(routes_telegram::publish_log),
+            )
+            .route(
+                "/api/v1/telegram/distribute/retry/{published_id}",
+                post(routes_telegram::retry_publish),
+            )
+            .route(
+                "/api/v1/telegram/distribute/revoke/{published_id}",
+                post(routes_telegram::revoke_publish),
+            )
+            .route(
+                "/api/v1/telegram/distribute/approve/{published_id}",
+                post(routes_telegram::approve_publish),
+            )
+            .route(
+                "/api/v1/telegram/distribute/reject/{published_id}",
+                post(routes_telegram::reject_publish),
+            );
+    }
     if unit_native("LIBRARY") {
         router = router
             .route("/api/v1/library/items", get(routes_library::public_list))
@@ -915,6 +1109,77 @@ pub fn build_router(state: AppState) -> Router {
             .route(
                 "/api/v1/admin/videos/candidates",
                 get(routes_videos::admin_candidates),
+            );
+    }
+    if unit_native("SOCIAL") {
+        router = router
+            .route(
+                "/api/v1/social/groups",
+                post(routes_social::create_group).get(routes_social::list_groups),
+            )
+            .route(
+                "/api/v1/social/groups/{group_id}",
+                get(routes_social::get_group),
+            )
+            .route(
+                "/api/v1/social/groups/{group_id}/join",
+                post(routes_social::join_group),
+            )
+            .route(
+                "/api/v1/social/groups/{group_id}/leave",
+                post(routes_social::leave_group),
+            )
+            .route("/api/v1/social/feed", get(routes_social::feed))
+            .route(
+                "/api/v1/social/groups/{group_id}/posts",
+                get(routes_social::group_posts),
+            )
+            .route("/api/v1/social/posts", post(routes_social::create_post))
+            .route(
+                "/api/v1/social/posts/{post_id}",
+                get(routes_social::get_post),
+            )
+            .route(
+                "/api/v1/social/posts/{post_id}/like",
+                post(routes_social::like_post).delete(routes_social::unlike_post),
+            )
+            .route(
+                "/api/v1/social/posts/{post_id}/comments",
+                post(routes_social::create_comment).get(routes_social::list_comments),
+            )
+            .route("/api/v1/social/follows", post(routes_social::follow))
+            .route(
+                "/api/v1/social/follows/{followed_id}",
+                delete(routes_social::unfollow),
+            )
+            .route("/api/v1/social/report", post(routes_social::create_report))
+            .route(
+                "/api/v1/social/notifications",
+                get(routes_social::list_notifications),
+            )
+            .route(
+                "/api/v1/social/notifications/{notif_id}/read",
+                post(routes_social::notification_read),
+            )
+            .route(
+                "/api/v1/social/notifications/unread-count",
+                get(routes_social::notifications_unread_count),
+            )
+            .route(
+                "/api/v1/admin/social/reports",
+                get(routes_social::report_queue),
+            )
+            .route(
+                "/api/v1/admin/social/reports/{report_id}/action",
+                post(routes_social::report_action),
+            )
+            .route(
+                "/api/v1/moderation/banned-words",
+                get(routes_social::list_banned_words).post(routes_social::add_banned_word),
+            )
+            .route(
+                "/api/v1/moderation/banned-words/{word_id}",
+                delete(routes_social::delete_banned_word),
             );
     }
     if unit_native("LMS") {
@@ -1100,6 +1365,95 @@ pub fn build_router(state: AppState) -> Router {
                 get(routes_calculators::calculator_audit),
             );
     }
+    if unit_native("FINANCE") {
+        router = router
+            // Public.
+            .route("/api/v1/finance/donate", post(routes_finance::donate))
+            .route(
+                "/api/v1/finance/callback",
+                get(routes_finance::payment_callback),
+            )
+            .route(
+                "/api/v1/finance/webhook/{gateway}",
+                post(routes_finance::payment_webhook),
+            )
+            .route(
+                "/api/v1/finance/callback/idpay",
+                post(routes_finance::idpay_callback),
+            )
+            .route(
+                "/api/v1/finance/donation-methods",
+                get(routes_finance::donation_methods),
+            )
+            .route(
+                "/api/v1/finance/donate/manual",
+                // The Multipart extractor defaults to a 2 MB body
+                // limit; the receipt field is capped at 5 MB by the
+                // handler itself (413 receipt_too_large), so the
+                // extractor limit is disabled for this route only.
+                post(routes_finance::donate_manual).layer(DefaultBodyLimit::disable()),
+            )
+            .route(
+                "/api/v1/finance/campaigns",
+                get(routes_finance::list_campaigns),
+            )
+            .route(
+                "/api/v1/finance/campaigns/{campaign_id}",
+                get(routes_finance::get_campaign),
+            )
+            .route(
+                "/api/v1/finance/recurring",
+                post(routes_finance::create_recurring),
+            )
+            // Admin.
+            .route(
+                "/api/v1/admin/finance/campaigns",
+                post(routes_finance::admin_create_campaign)
+                    .get(routes_finance::admin_list_campaigns),
+            )
+            .route(
+                "/api/v1/admin/finance/campaigns/{campaign_id}",
+                put(routes_finance::admin_update_campaign)
+                    .patch(routes_finance::admin_update_campaign)
+                    .delete(routes_finance::admin_delete_campaign),
+            )
+            .route(
+                "/api/v1/admin/finance/donations",
+                get(routes_finance::admin_list_donations),
+            )
+            .route(
+                "/api/v1/admin/finance/ledger",
+                get(routes_finance::admin_list_ledger),
+            )
+            .route(
+                "/api/v1/admin/finance/reconcile",
+                get(routes_finance::admin_reconcile),
+            )
+            .route(
+                "/api/v1/admin/finance/gateways",
+                get(routes_finance::admin_gateway_statuses),
+            )
+            .route(
+                "/api/v1/admin/finance/manual-donations",
+                get(routes_finance::admin_list_manual_donations),
+            )
+            .route(
+                "/api/v1/admin/finance/manual-donations/{proof_id}/proof-image",
+                get(routes_finance::admin_manual_proof_image),
+            )
+            .route(
+                "/api/v1/admin/finance/fx-rate",
+                get(routes_finance::admin_fx_rate),
+            )
+            .route(
+                "/api/v1/admin/finance/manual-donations/{proof_id}/approve",
+                post(routes_finance::approve_manual_donation),
+            )
+            .route(
+                "/api/v1/admin/finance/manual-donations/{proof_id}/reject",
+                post(routes_finance::reject_manual_donation),
+            );
+    }
     if unit_native("META") {
         router = router
             .route("/api/v1/themes/active", get(routes_meta::themes_active))
@@ -1231,6 +1585,142 @@ pub fn build_router(state: AppState) -> Router {
                 post(routes_auth::twofa_regenerate),
             )
             .route("/api/v1/auth/ws-ticket", post(routes_auth::ws_ticket));
+    }
+    if unit_native("ADMIN") {
+        router = router
+            .route("/api/v1/admin/settings", get(routes_admin::get_settings))
+            .route("/api/v1/admin/settings", put(routes_admin::put_settings))
+            .route(
+                "/api/v1/admin/settings/reencrypt",
+                post(routes_admin::reencrypt_secrets),
+            )
+            .route(
+                "/api/v1/admin/events/dead-letter",
+                get(routes_admin::list_dead_letter),
+            )
+            .route(
+                "/api/v1/admin/events/dead-letter/{event_id}/retry",
+                post(routes_admin::retry_dead_letter),
+            )
+            .route("/api/v1/admin/fonts", post(routes_admin::upload_font))
+            .route(
+                "/api/v1/admin/fonts/{locale}",
+                delete(routes_admin::delete_font),
+            )
+            .route(
+                "/api/v1/admin/sync/devices",
+                get(routes_admin::list_sync_devices),
+            )
+            .route(
+                "/api/v1/admin/builds/releases",
+                get(routes_admin::list_releases),
+            )
+            .route(
+                "/api/v1/admin/builds/prereqs",
+                get(routes_admin::get_prereqs),
+            )
+            .route(
+                "/api/v1/admin/builds/rebuild",
+                post(routes_admin::post_rebuild),
+            )
+            .route(
+                "/api/v1/admin/builds/requests",
+                get(routes_admin::list_requests),
+            )
+            .route(
+                "/api/v1/admin/builds/releases",
+                post(routes_admin::create_release),
+            )
+            .route(
+                "/api/v1/admin/connections/status",
+                get(routes_admin::get_connections_status),
+            )
+            .route(
+                "/api/v1/admin/connections/test/{service}",
+                post(routes_admin::test_connection),
+            )
+            .route(
+                "/api/v1/admin/notifications/broadcast",
+                post(routes_admin::create_broadcast),
+            )
+            .route(
+                "/api/v1/admin/notifications/broadcasts",
+                get(routes_admin::list_broadcasts),
+            )
+            .route(
+                "/api/v1/admin/notifications/broadcasts/{broadcast_id}",
+                get(routes_admin::get_broadcast),
+            )
+            .route(
+                "/api/v1/admin/notifications/delivery-stats",
+                get(routes_admin::get_delivery_stats),
+            )
+            .route(
+                "/api/v1/admin/notifications/channels",
+                get(routes_admin::get_channels),
+            )
+            .route(
+                "/api/v1/admin/notifications/preview",
+                post(routes_admin::post_broadcast_preview),
+            )
+            .route("/api/v1/admin/roles", get(routes_admin::list_roles))
+            .route("/api/v1/admin/roles", post(routes_admin::create_role))
+            .route(
+                "/api/v1/admin/roles/permissions",
+                get(routes_admin::list_permissions),
+            )
+            .route(
+                "/api/v1/admin/roles/{role_id}",
+                put(routes_admin::update_role),
+            )
+            .route(
+                "/api/v1/admin/roles/{role_id}",
+                delete(routes_admin::delete_role),
+            )
+            .route(
+                "/api/v1/admin/users/dashboard",
+                get(routes_admin::get_users_dashboard),
+            )
+            .route(
+                "/api/v1/admin/users/stats",
+                get(routes_admin::get_users_stats),
+            )
+            .route(
+                "/api/v1/admin/users/trash",
+                get(routes_admin::get_users_trash),
+            )
+            .route(
+                "/api/v1/admin/users/{user_id}/overview",
+                get(routes_admin::get_user_overview),
+            )
+            .route(
+                "/api/v1/admin/users/{user_id}/roles",
+                patch(routes_admin::patch_user_roles),
+            )
+            .route(
+                "/api/v1/admin/users/{user_id}/sessions/revoke",
+                post(routes_admin::revoke_user_sessions),
+            )
+            .route(
+                "/api/v1/admin/users/{user_id}/suspend",
+                post(routes_admin::suspend_user),
+            )
+            .route(
+                "/api/v1/admin/users/{user_id}/activate",
+                post(routes_admin::activate_user),
+            )
+            .route(
+                "/api/v1/admin/users/{user_id}",
+                delete(routes_admin::soft_delete_user),
+            )
+            .route(
+                "/api/v1/admin/users/{user_id}/restore",
+                post(routes_admin::restore_user),
+            )
+            .route(
+                "/api/v1/admin/users/{user_id}/permanent",
+                delete(routes_admin::permanent_delete_user),
+            );
     }
 
     router.fallback(proxy).with_state(state)

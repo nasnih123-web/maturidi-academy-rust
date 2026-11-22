@@ -21,13 +21,6 @@
 //!   an approved `rule_config` row (or the verbatim source-rule data
 //!   seeded through the admin API in tests).
 
-#[path = "calc_decimal.rs"]
-mod calc_decimal;
-#[path = "calc_engines.rs"]
-mod calc_engines;
-#[path = "calc_mosaref.rs"]
-mod calc_mosaref;
-
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -55,12 +48,12 @@ use crate::{
     AppState,
 };
 
-use calc_decimal::{dec_from_json, py_repr, CalcError, Dec};
-use calc_engines::{
+use crate::calc_decimal::{dec_from_json, py_repr, CalcError, Dec};
+use crate::calc_engines::{
     compute_inheritance, compute_miras, compute_zakat, compute_zakat_extended, ExtendedSections,
     MirasEstate, MirasFail, MirasFamily, ZakatRates,
 };
-use calc_mosaref::conjugate_verb;
+use crate::calc_mosaref::conjugate_verb;
 
 const VALID_MADHABS: &[&str] = &["hanafi", "maliki", "shafii", "hanbali"];
 const RULE_STATUSES: &[&str] = &["draft", "pending_review", "approved", "rejected"];

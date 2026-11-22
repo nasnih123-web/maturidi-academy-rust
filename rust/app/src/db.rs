@@ -563,7 +563,8 @@ CREATE TABLE themes (
     created_at TIMESTAMPTZ NOT NULL
 );
 CREATE TABLE platform_settings (
-    key TEXT PRIMARY KEY, value JSONB NOT NULL, encryption_key_version INTEGER NOT NULL DEFAULT 1
+    key TEXT PRIMARY KEY, value JSONB NOT NULL, encryption_key_version INTEGER NOT NULL DEFAULT 1,
+    updated_at TIMESTAMPTZ
 );
 CREATE TABLE api_keys (
     id UUID PRIMARY KEY, key_hash TEXT NOT NULL UNIQUE, key_prefix TEXT NOT NULL,
@@ -583,8 +584,8 @@ CREATE TABLE web_push_subscriptions (
     p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL,
     UNIQUE(user_id, endpoint)
 );
-CREATE TABLE roles (id UUID PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at TIMESTAMPTZ NOT NULL);
-CREATE TABLE permissions (id UUID PRIMARY KEY, key TEXT NOT NULL UNIQUE, created_at TIMESTAMPTZ NOT NULL);
+CREATE TABLE roles (id UUID PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT, created_at TIMESTAMPTZ NOT NULL);
+CREATE TABLE permissions (id UUID PRIMARY KEY, key TEXT NOT NULL UNIQUE, description TEXT, created_at TIMESTAMPTZ NOT NULL);
 CREATE TABLE role_permissions (
     role_id UUID NOT NULL, permission_id UUID NOT NULL,
     PRIMARY KEY (role_id, permission_id)
@@ -592,6 +593,39 @@ CREATE TABLE role_permissions (
 CREATE TABLE user_roles (
     user_id UUID NOT NULL, role_id UUID NOT NULL,
     PRIMARY KEY (user_id, role_id)
+);
+CREATE TABLE ai_provider_configs (
+    id UUID PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL, version TEXT,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE, is_fallback BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL, UNIQUE(provider, model)
+);
+CREATE TABLE notification_broadcasts (
+    id UUID PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL,
+    cohort JSONB NOT NULL DEFAULT '{}', channels_requested JSONB NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'queued', total_recipients INTEGER NOT NULL DEFAULT 0,
+    total_sent INTEGER NOT NULL DEFAULT 0, total_skipped INTEGER NOT NULL DEFAULT 0,
+    total_failed INTEGER NOT NULL DEFAULT 0, created_by UUID,
+    created_at TIMESTAMPTZ NOT NULL, finished_at TIMESTAMPTZ
+);
+CREATE TABLE notification_deliveries (
+    id UUID PRIMARY KEY, broadcast_id UUID NOT NULL, user_id UUID NOT NULL,
+    channel TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', skip_reason TEXT,
+    error TEXT, sent_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL,
+    UNIQUE(broadcast_id, user_id, channel)
+);
+CREATE TABLE build_releases (
+    id UUID PRIMARY KEY, platform TEXT NOT NULL, version TEXT NOT NULL, build_number TEXT,
+    download_url TEXT, download_expires_at TIMESTAMPTZ, artifact_key TEXT,
+    file_size_bytes BIGINT, sha256 TEXT, signed BOOLEAN NOT NULL DEFAULT FALSE,
+    build_metadata JSONB NOT NULL DEFAULT '{}', released_by UUID,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE build_requests (
+    id UUID PRIMARY KEY, platform TEXT NOT NULL, version TEXT, ref TEXT,
+    status TEXT NOT NULL DEFAULT 'queued', note TEXT, branding JSONB NOT NULL DEFAULT '{}',
+    provider TEXT, provider_run_id TEXT, provider_run_url TEXT, artifact_name TEXT,
+    dispatched_at TIMESTAMPTZ, requested_by UUID, created_at TIMESTAMPTZ NOT NULL,
+    finished_at TIMESTAMPTZ
 );
 CREATE TABLE user_consent (
     id UUID PRIMARY KEY, user_id UUID NOT NULL, consent_type TEXT NOT NULL,
@@ -601,6 +635,35 @@ CREATE TABLE audit_logs (
     id UUID PRIMARY KEY, actor_id UUID, actor_type TEXT NOT NULL, action TEXT NOT NULL,
     entity_type TEXT NOT NULL, entity_id TEXT, old_values JSONB, new_values JSONB,
     ip TEXT, user_agent TEXT, request_id TEXT, created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE content_placements (
+    id UUID PRIMARY KEY, domain TEXT NOT NULL, content_type TEXT NOT NULL,
+    content_id TEXT NOT NULL, surface TEXT NOT NULL, slot TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0, audience JSONB NOT NULL DEFAULT '{}',
+    starts_at TIMESTAMPTZ, ends_at TIMESTAMPTZ, locale TEXT,
+    active BOOLEAN NOT NULL DEFAULT TRUE, created_by UUID,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE content_distributions (
+    id UUID PRIMARY KEY, domain TEXT NOT NULL, content_type TEXT NOT NULL,
+    content_id TEXT NOT NULL, channel TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    scheduled_at TIMESTAMPTZ, schedule_tz TEXT, until_at TIMESTAMPTZ, updated_by UUID,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE social_posts (
+    id UUID PRIMARY KEY, group_id UUID, author_id UUID NOT NULL, body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'published', comment_count INTEGER NOT NULL DEFAULT 0,
+    likes_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE religious_places (
+    id UUID PRIMARY KEY, name JSONB NOT NULL, description JSONB,
+    lat DOUBLE PRECISION NOT NULL, lng DOUBLE PRECISION NOT NULL,
+    type TEXT NOT NULL DEFAULT 'mosque',
+    city TEXT, image_url TEXT, images JSONB, video_url TEXT, video_360_id UUID,
+    submitted_by UUID, workflow_status TEXT NOT NULL DEFAULT 'draft',
+    version INTEGER NOT NULL DEFAULT 1, created_by UUID,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
 );
 CREATE TABLE domain_events (
     event_id UUID PRIMARY KEY, idempotency_key TEXT UNIQUE, aggregate_type TEXT NOT NULL,
@@ -612,6 +675,36 @@ CREATE TABLE domain_events (
 CREATE TABLE notifications (
     id UUID PRIMARY KEY, user_id UUID NOT NULL, notif_type TEXT NOT NULL,
     title JSONB NOT NULL, body TEXT, data JSONB, read_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE social_groups (
+    id UUID PRIMARY KEY, name JSONB NOT NULL, description JSONB, slug TEXT NOT NULL UNIQUE,
+    cover_media_id UUID, is_public BOOLEAN NOT NULL DEFAULT TRUE, member_count INTEGER NOT NULL DEFAULT 0,
+    created_by UUID, created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE group_memberships (
+    id UUID PRIMARY KEY, group_id UUID NOT NULL, user_id UUID NOT NULL, role TEXT NOT NULL DEFAULT 'member',
+    joined_at TIMESTAMPTZ NOT NULL, UNIQUE(group_id, user_id)
+);
+CREATE TABLE post_likes (
+    id UUID PRIMARY KEY, post_id UUID NOT NULL, user_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL,
+    UNIQUE(post_id, user_id)
+);
+CREATE TABLE social_comments (
+    id UUID PRIMARY KEY, post_id UUID NOT NULL, author_id UUID NOT NULL, body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'published', created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE social_follows (
+    id UUID PRIMARY KEY, follower_id UUID NOT NULL, followed_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL, UNIQUE(follower_id, followed_id)
+);
+CREATE TABLE social_reports (
+    id UUID PRIMARY KEY, target_type TEXT NOT NULL, target_id UUID NOT NULL, reason TEXT NOT NULL,
+    reported_by UUID NOT NULL, status TEXT NOT NULL DEFAULT 'new', reported_at TIMESTAMPTZ NOT NULL,
+    triaged_at TIMESTAMPTZ, actioned_at TIMESTAMPTZ, sla_due_at TIMESTAMPTZ NOT NULL,
+    action TEXT, note TEXT, actioned_by UUID
+);
+CREATE TABLE moderation_banned_words (
+    id UUID PRIMARY KEY, word TEXT NOT NULL UNIQUE, added_by UUID, created_at TIMESTAMPTZ NOT NULL
 );
 CREATE TABLE notification_preferences (
     id UUID PRIMARY KEY, user_id UUID NOT NULL, channel TEXT NOT NULL,
@@ -640,6 +733,47 @@ CREATE TABLE donations (
     id UUID PRIMARY KEY, donor_id UUID, amount INTEGER NOT NULL, currency TEXT NOT NULL,
     gateway TEXT, gateway_reference TEXT, status TEXT NOT NULL, donor_name TEXT,
     campaign_id UUID, created_at TIMESTAMPTZ NOT NULL
+);
+-- Wave 7 (finance): production `donations` carries payment_intent_id
+-- (NOT NULL, unique) - the Wave 2 mirror omitted it. Added here so the
+-- finance routes can read DonationOut.intent_id and finalize
+-- re-entrantly. `amount` stays INTEGER per ADR-028 (production is
+-- BigInteger - finance amounts in tests stay below 2^31).
+ALTER TABLE donations ADD COLUMN payment_intent_id UUID;
+CREATE TABLE donation_campaigns (
+    id UUID PRIMARY KEY, title JSONB NOT NULL, description JSONB,
+    goal_amount BIGINT NOT NULL DEFAULT 0, raised_amount BIGINT NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active', cover TEXT,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ
+);
+CREATE TABLE payment_intents (
+    id UUID PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, amount BIGINT NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'IRR', campaign_id UUID, donor_id UUID,
+    donor_name TEXT, status TEXT NOT NULL DEFAULT 'pending', gateway TEXT NOT NULL DEFAULT 'zarinpal',
+    authority TEXT, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ
+);
+CREATE TABLE ledger_entries (
+    id UUID PRIMARY KEY, entry_type TEXT NOT NULL, amount BIGINT NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'IRR', reference TEXT, donation_id UUID,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE payment_webhook_log (
+    id UUID PRIMARY KEY, gateway TEXT NOT NULL, payload_hash TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'processed', processed_at TIMESTAMPTZ
+);
+CREATE TABLE recurring_donations (
+    id UUID PRIMARY KEY, donor_id UUID NOT NULL, campaign_id UUID, amount BIGINT NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'IRR', interval TEXT NOT NULL DEFAULT 'monthly',
+    status TEXT NOT NULL DEFAULT 'active', next_charge_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ
+);
+CREATE TABLE manual_donation_proofs (
+    id UUID PRIMARY KEY, payment_intent_id UUID NOT NULL UNIQUE, method TEXT NOT NULL,
+    proof_text TEXT, proof_image_key TEXT, proof_image_mime TEXT, wallet_label TEXT,
+    amount_irr BIGINT, fx_rate_irr BIGINT, fx_source TEXT,
+    review_status TEXT NOT NULL DEFAULT 'pending', reviewed_by UUID,
+    reviewed_at TIMESTAMPTZ, review_note TEXT,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ
 );
 CREATE TABLE home_sections (
     id UUID PRIMARY KEY, key TEXT NOT NULL UNIQUE, sort_order INTEGER NOT NULL,
@@ -951,6 +1085,46 @@ CREATE TABLE sync_tombstones (
     id UUID PRIMARY KEY, user_id UUID NOT NULL, entity_type TEXT NOT NULL,
     entity_id TEXT NOT NULL, deleted_by UUID, deleted_at TIMESTAMPTZ NOT NULL,
     version INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE device_cursors (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, device_id TEXT NOT NULL,
+    cursor_seq BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL,
+    UNIQUE(user_id, device_id)
+);
+CREATE TABLE sync_operations (
+    id UUID PRIMARY KEY, client_op_id TEXT NOT NULL UNIQUE, user_id UUID NOT NULL,
+    device_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+    op_type TEXT NOT NULL, payload JSONB, base_version INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending', result JSONB,
+    created_at TIMESTAMPTZ NOT NULL, applied_at TIMESTAMPTZ
+);
+CREATE TABLE conflict_records (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL, local_payload JSONB, remote_payload JSONB,
+    local_version INTEGER, remote_version INTEGER,
+    resolution TEXT NOT NULL DEFAULT 'pending', resolved_by UUID,
+    resolved_at TIMESTAMPTZ, resolution_note TEXT, created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE telegram_distribution_policies (
+    id UUID PRIMARY KEY, content_type TEXT NOT NULL UNIQUE,
+    policy TEXT NOT NULL DEFAULT 'never', message_template JSONB,
+    target_channels JSONB NOT NULL DEFAULT '[]', spacing_seconds INTEGER NOT NULL DEFAULT 0,
+    require_approval BOOLEAN NOT NULL DEFAULT TRUE, schedule_config JSONB,
+    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE telegram_published (
+    id UUID PRIMARY KEY, source_content_type TEXT NOT NULL,
+    source_content_id TEXT NOT NULL, distribution_target TEXT NOT NULL,
+    published_message_id BIGINT, idempotency_key TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending', retry_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT, created_at TIMESTAMPTZ NOT NULL, sent_at TIMESTAMPTZ
+);
+CREATE TABLE telegram_callbacks (
+    nonce TEXT PRIMARY KEY, source_content_type TEXT NOT NULL,
+    source_content_id TEXT NOT NULL, op TEXT NOT NULL, actor_user_id UUID NOT NULL,
+    signature TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL
 );
 CREATE TABLE hifz_attempts (
     id UUID PRIMARY KEY, user_id UUID NOT NULL, surah INTEGER NOT NULL, page INTEGER,
