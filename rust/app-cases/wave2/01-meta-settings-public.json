@@ -11,9 +11,13 @@
       "quran.madhhab_default": "hanafi",
       "videos.subtitle_langs": ["fa", "ar", "en", "ur", "dari"],
       "home.sections": [],
-      "places.globe.defaultLat": 21.4225,
-      "places.globe.defaultLng": 39.8262,
-      "push.vapid_public_key": null
+      "places.globe": {
+        "defaultLat": 21.4225,
+        "defaultLng": 39.8262,
+        "defaultAltitude": 2.5,
+        "defaultMode": "satellite",
+        "autoRotate": false
+      }
     }
   }
 }
