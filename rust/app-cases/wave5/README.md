@@ -24,8 +24,11 @@ Notes pinned by the cases:
   in the handler; a non-`.vtt` name answers 404 `subtitle_not_found`.
 - `POST /api/v1/voice/transcribe` and `POST /api/v1/voice/ask` are
   intentionally NOT native (ADR-046: no STT engine is embedded in the
-  Rust binary; STT quality must never be faked) — they fall through to
-  the proxy, so with a dead origin they answer 502 `bad_gateway`.
+  Rust binary; STT quality must never be faked) — in Wave 5 they fell
+  through to the proxy, so with a dead origin they answered 502
+  `bad_gateway`. Since Wave 8 they are sidecar-contract routes
+  (ADR-134): explicit forwarding to `SIDECAR_URL`, honest 503
+  `voice_stt_unavailable` when it is unset/unreachable.
 - Voice settings are raw strings (ADR-049): a stored int setting comes
   back as a string (e.g. `"60"`), while an unset key comes back as its
   typed default (e.g. `120`).
