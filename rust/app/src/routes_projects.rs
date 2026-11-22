@@ -13,7 +13,8 @@
 //!
 //! Kill switch: wire under `if unit_native("PROJECTS")` in `lib.rs`
 //! (like the other modules); `RUST_ANYTHING_UNIT_PROJECTS=original`
-//! falls through to the proxy.
+//! is retired at the Wave 8 lift (ADR-133) — it only logs a warning
+//! and the routes stay native.
 //!
 //! Deliberate Wave 8 addition (ADR-142): the due-soon cycle is also
 //! exposed as `POST /api/v1/admin/projects/due-soon-cycle` (requires

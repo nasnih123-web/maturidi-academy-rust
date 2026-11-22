@@ -6,8 +6,8 @@
 //! Coqui (local) is never available in the Rust binary, so it
 //! always degrades; the cloud provider is a real OpenAI-shape HTTP
 //! client. This module is wired for the future native `/voice/ask`
-//! (ADR-047); today the ask route itself stays proxied because it
-//! needs the STT sidecar first (ADR-046).
+//! (ADR-047); today the ask route itself is sidecar-contract (ADR-134)
+//! because it needs the STT sidecar first (ADR-046).
 //!
 //! Dead code is allowed here on purpose for the synthesis helpers:
 //! no native route calls them yet (same ADR-046/ADR-047 reason).

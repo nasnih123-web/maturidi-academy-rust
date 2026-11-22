@@ -9,8 +9,8 @@
 //! name must not be an Arabic letter.
 //!
 //! Dead code is allowed here on purpose: no native route calls this
-//! module yet (the ask route stays proxied until an STT sidecar
-//! exists, ADR-046/ADR-047). It is exercised by unit tests and is
+//! module yet (the ask route is sidecar-contract, ADR-134, until an
+//! STT sidecar exists — ADR-046/ADR-047). It is exercised by unit tests and is
 //! the library the future native ask will call.
 #![allow(dead_code)]
 

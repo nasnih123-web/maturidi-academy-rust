@@ -3859,12 +3859,11 @@ pub async fn data_purge(
 
 /// `WS /api/v1/quran/hifz/attempts/{attempt_id}/stream` — the live
 /// reading stream needs a stateful WebSocket holding a native
-/// sherpa-onnx recognizer in memory; the Rust binary has no ASR and
-/// the HTTP proxy cannot relay WebSocket upgrades (ADR-031). This
-/// explicit 503 keeps the failure honest instead of letting the
-/// proxy mangle the handshake. Use the Python origin directly
-/// (or `RUST_ANYTHING_UNIT_HIFZ=original` + direct origin access)
-/// for live streaming.
+/// sherpa-onnx recognizer in memory; the Rust binary has no ASR
+/// (ADR-031), and there is no sidecar route for it either (ADR-134
+/// covers only the 8 listed sidecar routes). This explicit 503 keeps
+/// the failure honest. Use the Python sidecar directly (its own WS
+/// stream endpoint) for live streaming.
 pub async fn hifz_stream_unavailable() -> ApiResult<(StatusCode, Json<Value>)> {
     Ok((
         StatusCode::SERVICE_UNAVAILABLE,
