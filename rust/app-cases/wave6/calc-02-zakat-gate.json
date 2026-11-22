@@ -1,0 +1,11 @@
+{
+  "case": "zakat.calc gate (no approved rule: 422 rules_not_approved)",
+  "auth": "none",
+  "method": "POST",
+  "path": "/api/v1/calculators/zakat",
+  "body": {"assets": {"cash": 500}, "debts": 0},
+  "expected_status": 422,
+  "expected": {
+    "error": {"code": "rules_not_approved"}
+  }
+}

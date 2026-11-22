@@ -1,0 +1,1 @@
+{"auth":"user","body":null,"case":"lms.cohort enroll (active, seats_left decremented)","expected":{"cohort_id":"<uuid>","seats_left":0,"status":"active"},"expected_status":200,"method":"POST","path":"/api/v1/lms/cohorts/<uuid>/enroll"}

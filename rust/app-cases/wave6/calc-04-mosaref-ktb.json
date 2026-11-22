@@ -1,0 +1,13 @@
+{
+  "case": "mosaref conjugate sound verb ktb/faala (200)",
+  "auth": "none",
+  "method": "POST",
+  "path": "/api/v1/calculators/mosaref",
+  "body": {"root": "كتب", "bab": "faala", "transitivity": "mutaadi"},
+  "expected_status": 200,
+  "expected": {
+    "root": "كتب",
+    "bab": "faala",
+    "verb_class": "sound"
+  }
+}

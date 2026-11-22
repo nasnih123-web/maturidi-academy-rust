@@ -1,0 +1,1 @@
+{"auth":"user","body":null,"case":"lms.course detail (lessons, progress 0, no certificate)","expected":{"completed_lessons":0,"course":{"id":"<uuid>","progress_pct":0.0},"has_certificate":false,"lessons":[],"progress_pct":0.0,"total_lessons":0},"expected_status":200,"method":"GET","path":"/api/v1/lms/courses/<uuid>"}

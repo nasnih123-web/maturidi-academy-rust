@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"library.list (guest: public published items only)","expected":{"items":"array, each with id/kind/title/workflow_status=published/visibility=public","next_cursor":"null when the page is exhausted"},"expected_status":200,"method":"GET","path":"/api/v1/library/items"}

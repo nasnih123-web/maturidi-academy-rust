@@ -1,0 +1,19 @@
+{
+  "case": "inheritance.calc gate (no approved rule: 422 rules_not_approved)",
+  "auth": "none",
+  "method": "POST",
+  "path": "/api/v1/calculators/inheritance",
+  "body": {
+    "madhab": "hanafi",
+    "estate_value": 1200,
+    "heirs": [
+      {"type": "spouse_t", "count": 1},
+      {"type": "mother_t", "count": 1},
+      {"type": "child_t", "count": 2}
+    ]
+  },
+  "expected_status": 422,
+  "expected": {
+    "error": {"code": "rules_not_approved"}
+  }
+}

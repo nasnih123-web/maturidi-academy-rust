@@ -1,0 +1,1 @@
+{"auth":"user","body":{"position_seconds":0,"status":"completed"},"case":"lms.progress complete (last lesson -> course_completed + certificate code)","expected":{"certificate_code":"<cert-code>","course_completed":true,"position_seconds":0,"status":"completed"},"expected_status":200,"method":"POST","path":"/api/v1/lms/lessons/<uuid>/progress"}

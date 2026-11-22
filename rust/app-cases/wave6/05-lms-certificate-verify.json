@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"certificates.verify (public, rate-limited; unknown code -> valid false, still 200)","expected":{"code":"MA-2099-XXXX","valid":false},"expected_status":200,"method":"GET","path":"/api/v1/certificates/MA-2099-XXXX/verify"}

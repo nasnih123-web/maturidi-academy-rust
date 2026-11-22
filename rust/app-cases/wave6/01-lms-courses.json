@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"lms.courses (guest: public active courses only, cursor page)","expected":{"items":[],"next_cursor":null},"expected_status":200,"method":"GET","path":"/api/v1/lms/courses"}

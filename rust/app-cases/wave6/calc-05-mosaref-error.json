@@ -1,0 +1,11 @@
+{
+  "case": "mosaref root too short (422 root_too_short)",
+  "auth": "none",
+  "method": "POST",
+  "path": "/api/v1/calculators/mosaref",
+  "body": {"root": "اب", "bab": "faala", "transitivity": "mutaadi"},
+  "expected_status": 422,
+  "expected": {
+    "error": {"code": "root_too_short"}
+  }
+}

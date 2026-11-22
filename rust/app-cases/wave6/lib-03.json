@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"library.detail (published public item with signed media URL)","expected":{"id":"{item_id}","media_url":"signed download-by-ref URL (null for external-only items)","transcript":"absent — the public shape never exposes transcript/ocr_text","workflow_status":"published"},"expected_status":200,"method":"GET","path":"/api/v1/library/items/{item_id}"}

@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"library.search (lexical rank: title +3 / tags +2 / description +1.5 / transcript-or-OCR +1)","expected":{"hits":"array sorted by score desc; each hit has score (3 decimals) and matched_in (sorted set)","query":"ماتریدی","total":"number of hits"},"expected_status":200,"method":"GET","path":"/api/v1/library/search?q=ماتریدی"}

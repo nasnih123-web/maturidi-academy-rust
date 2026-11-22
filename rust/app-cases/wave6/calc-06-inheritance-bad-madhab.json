@@ -1,0 +1,11 @@
+{
+  "case": "inheritance.calc unknown madhab (422 bad_madhab, before any rule lookup)",
+  "auth": "none",
+  "method": "POST",
+  "path": "/api/v1/calculators/inheritance",
+  "body": {"madhab": "hanbali2", "estate_value": 100, "heirs": [{"type": "spouse_t"}]},
+  "expected_status": 422,
+  "expected": {
+    "error": {"code": "bad_madhab"}
+  }
+}

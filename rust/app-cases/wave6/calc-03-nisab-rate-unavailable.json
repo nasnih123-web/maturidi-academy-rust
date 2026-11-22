@@ -1,0 +1,15 @@
+{
+  "case": "nisab-rate with no cache and no source URL (200 price_unavailable)",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/calculators/zakat/nisab-rate",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "status": "price_unavailable",
+    "gold_per_gram": null,
+    "silver_per_gram": null,
+    "source": "unconfigured",
+    "stale": false
+  }
+}

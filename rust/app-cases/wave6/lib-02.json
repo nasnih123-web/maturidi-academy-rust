@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"library.list cursor pagination (after + limit)","expected":{"items":"exactly 1 item (the newest published public item)","next_cursor":"opaque base64url cursor; passing it as ?after= returns the next page"},"expected_status":200,"method":"GET","path":"/api/v1/library/items?limit=1"}
