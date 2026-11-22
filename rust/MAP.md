@@ -183,6 +183,49 @@ The honest path for a pure Rust server is:
     (5), `voice_tts.rs` (6, incl. a mock cloud TTS endpoint),
     `subtitles.rs` (4), `video_links.rs` (2). Cases:
     `rust/app-cases/wave5/` (14 cases).
+- Wave 6 (done, verified green locally — `cargo fmt`, `clippy -D warnings`,
+  `cargo test` incl. Postgres smoke): library + LMS + calculators are
+  answered natively in Rust; everything else still proxies. Kill switch
+  per module: `RUST_ANYTHING_UNIT_<LIBRARY|LMS|CALCULATORS>=original`
+  falls back to the Python origin. Details: ADR-051 – ADR-075.
+  Total native routes: 302 route+method combos (Wave 6 adds 69:
+  library 16, LMS 37, calculators 16).
+  - library: `GET /api/v1/library/items`, `/search`,
+    `/items/{item_id}/stream`, `/items/{item_id}`,
+    `/library/download-by-ref`, `GET|POST /api/v1/admin/library/items`,
+    `GET|PUT|DELETE /admin/library/items/{item_id}`,
+    `POST .../transition`, `GET .../versions`,
+    `POST .../versions/{version}/revert`,
+    `POST /api/v1/admin/library/import`, `.../reprocess`, `.../index-ai`
+    (upload scanning: SHA-256 blocklist + EICAR + manual review, ADR-051;
+    media pipeline stays a Python sidecar, ADR-053; index-ai native with
+    the hash provider, ADR-054)
+  - LMS: `GET /api/v1/lms/courses`, `/courses/{id}`, `/lessons/{id}`,
+    `POST /lessons/{id}/progress`, `POST /quiz/submit`,
+    `POST /quiz/{lesson_id}`, `GET /reports/me`, `/recommendations`,
+    `/cohorts`, `POST /cohorts/{id}/enroll`, `GET /certificates/mine`,
+    `/certificates/{code}/download`, `/certificates/download-by-ref`,
+    `/certificates/{code}/verify`,
+    `GET /api/v1/certificates/{code}/verify`, admin curricula/courses/
+    lessons/cohorts/prerequisites/enrollments/progress/certificates
+    (certificate PDF stays a Python sidecar, ADR-061; the record is
+    issued natively and verifiable immediately)
+  - calculators: `POST /api/v1/calculators/inheritance`,
+    `POST|GET /inheritance/cases`, `POST /zakat`,
+    `GET /zakat/nisab-rate`, `POST /zakat/extended`,
+    `POST /inheritance/miras`, `POST /mosaref`,
+    `GET|POST /api/v1/admin/calculators/rules`,
+    `GET|PATCH /rules/{rule_id}`, `POST .../submit`, `.../review`,
+    `GET .../history`, `GET /api/v1/admin/calculators/audit`
+    (exact decimal/fraction arithmetic, ADR-065; fiqh tables ported
+    verbatim from the Python engines, never invented, ADR-009;
+    golden fixtures pin the exact engine output, ADR-075)
+  - Tests: `rust/app/tests/wave6.rs` (40 tests: 14 library + 14 LMS +
+    11 calculators sqlite tests + 1 combined `wave6_pg_smoke`
+    replaying all three critical paths on local Postgres when
+    `WAVE2_PG_URL` is set) plus 35 lib unit tests in
+    `calc_decimal.rs` / `calc_engines.rs` / `calc_mosaref.rs`. Cases:
+    `rust/app-cases/wave6/` (20 cases: lib-01–08, 01–06 lms, calc-01–06).
   - Tests: `rust/app/tests/wave4.rs` (24 tests, sqlite in-memory;
     `wave4_pg_smoke` replays the critical path on local Postgres when
     `WAVE2_PG_URL` is set). Cases: `rust/app-cases/wave4/` (15 cases).

@@ -670,3 +670,153 @@ Status: accepted
 Context: The user decided 2026-11-19 to move away from ClamAV (replacement TBD: VirusTotal cloud, local YARA, or hash-check + manual admin review). The Wave 2 behaviour is fail-closed: 503 `antivirus_unavailable` unless `CLAMAV_ALLOW_INSECURE_DEV_BYPASS=true` and `APP_ENV=dev`.
 Decision: No Wave 5 route needs a scan — videos has no upload route (library admin is Wave 6) and voice transcribe/ask are proxied (ADR-046) and scanned by the origin. The Wave 2 fail-closed gate is preserved wherever uploads go native; ClamAV is NOT reintroduced as a default; a replacement scanner is still TBD per the user's decision.
 Consequences: No un-scanned upload path is created by Wave 5. Wave 6 (library uploads) must resolve the scanner question before going native.
+
+## ADR-051: Library upload scanning — SHA-256 blocklist + EICAR signature + manual admin review (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The user decided 2026-11-19 to move away from ClamAV (ADR-050); Wave 6 must resolve the scanner question before library uploads go native. The candidate replacements were VirusTotal cloud, local YARA, or hash-check + manual admin review.
+Decision: Every uploaded byte passes one gate, `scan_upload`, before any validation or storage write: (a) the SHA-256 of the bytes is compared against the admin-managed setting `library.blocked_hashes` (JSON array of hex digests, empty default, read via the encrypted settings store); (b) the byte stream is scanned for the standard EICAR test signature. A hit returns 422 `file_infected` with `details.signature` (`"blocked-hash"` or `"EICAR-STANDARD-ANTIVIRUS-TEST-FILE"`) and writes audit row `library.upload_rejected_infected`, exactly like Python. Clean bytes pass. All upload paths (create/update file, cover, fetched Aparat cover) go through this one gate, and every upload lands as `draft`, so the workflow review is the manual gate before anything is `published`. There is no bypass flag and no un-scanned upload path.
+Consequences: ClamAV is NOT reintroduced. The blocklist is admin-managed through the existing settings surface (ADR-059). This is the hash-check + manual-review option from the user's 2026-11-19 decision.
+
+## ADR-052: External video metadata — best-effort YouTube oEmbed + Aparat, never a fabricated title (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: For `kind=video` with an external link and no manual title, Python resolves the title from the video provider.
+Decision: The title is resolved in order: YouTube oEmbed (`https://www.youtube.com/oembed?url=…&format=json`, 4 s timeout), then the Aparat JSON API (`https://www.aparat.com/etc/api/video/videohash/…`, 4 s), then og-scrape of the Aparat page. Any failure (network, non-2xx, unparseable body) yields `None`, never a fabricated title; if no title is resolvable the create fails 422 `title_required`. Canonical URLs are produced by the shared `video_links.rs` (YouTube watch URLs, Aparat watch URLs); a direct-file URL is accepted only for `https` URLs whose path ends `.mp4/.webm/.m4v/.mov`. A fetched Aparat cover goes through the same scan gate (ADR-051) and the 5 MB cover cap.
+Consequences: No title is ever invented. Live-provider failures surface as an honest 422, not a guessed title.
+
+## ADR-053: Library media pipeline stays a Python sidecar; Rust only marks rows pending (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: There is no Rust media worker (no faster-whisper, no OCR engine in the Rust binary, ADR-008).
+Decision: `reprocess` (`transcribe`/`ocr`) and the upload/create paths only set `transcript_status`/`ocr_status` to `pending` and clear `processing_error`; the response reports `enqueued: false` (in the audit `new_values`, the response body being the item itself). This follows the Wave 3 ingest precedent (ADR-022): the Python ARQ worker does the work, Rust triggers honestly and never claims a job was queued when it was not.
+Consequences: Transcripts/OCR text appear only when the Python worker runs against the same database. No media work is faked.
+
+## ADR-054: index-ai is native with the hash embedding provider; chunk approval is governed by fatwa.approve (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `POST /api/v1/admin/library/items/{id}/index-ai` runs the ingestion pipeline: chunking, embedding, chunk rows, ingestion-run stats.
+Decision: The pipeline is native: `chunk_text_paragraphs` ported verbatim from Python (500-word max, 50-word overlap, 20-word min; sentence split after `.!? ؟ 。` + whitespace, hand-rolled because Rust `regex` has no lookbehind), `ingestion_normalize` (whitespace-only, distinct from `embeddings.normalize_text`), hash embeddings only (`embedding_vec` is never named, ADR-030), chunks written to `fiqh_knowledge_chunks` with `source_type='ingested'`, `source_ref={type:library_item, id, version:str}`, plus an `ingestion_runs` row with stage stats. Only `approved`/`published` items are indexable (else 422 `item_not_indexable`); an item with no fatwa scope fails 422 `no_ai_scopes`. Without the `fatwa.approve` permission the chunks stay `draft` and `ai_indexed` stays `false`; with it they are approved and `ai_indexed` becomes `true`. Re-indexing inserts fresh chunks and does not delete old ones. Response shape: `{item_id, ai_indexed, chunks_created, chunks_approved, chunk_ids, scopes, detail}`.
+Consequences: The RAG index path is fully native with the hash provider (ADR-019); real embedding providers remain a Wave 7+ follow-up.
+
+## ADR-055: Admin library list keeps admin fields and nulls the signed URLs (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's admin library output differs from the public output in which fields it carries.
+Decision: The admin list/detail shape (`LibraryItemAdminOut`) carries `transcript`/`ocr_text`/`processing_error` after `cover_url`, but `media_url`/`cover_url` are null in the admin list — exactly as Python's `_to_out(..., None, None)`. The public shape never exposes `transcript`/`ocr_text`/`processing_error`.
+Consequences: Admin and public shapes match Python field-for-field, including the null URLs.
+
+## ADR-056: Search score rounding — Rust half-away-from-zero vs Python banker's rounding (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Library search scores are rounded to 3 decimals.
+Decision: Rust uses its native `round()` (half away from zero) rather than Python's `round(x, 3)` (banker's). The two differ only on exact-half values (e.g. x.xxx5); ranking and `matched_in` are unaffected.
+Consequences: Accepted as an ADR-024/040-class edge difference, not worth a special-case port.
+
+## ADR-057: Multipart create parses metadata before enforcing file-size errors (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The order of validation checks in multipart create/update matters for which error a bad request gets.
+Decision: The `metadata` JSON field is parsed (422 `invalid_metadata` on bad JSON/kind) before file bytes are size-checked, matching the Python router's order. File bytes are buffered in memory like Python's `read_upload_capped`; a provisional streaming cap of 512 MB (file) / 5 MB (cover) applies, then the per-kind limit returns 413 `file_too_large` (`max_bytes`, `kind` from the validate path). A cover oversize at read time is also `file_too_large` with `max_bytes: 5242880` per Python's `read_capped_upload` defaults — `cover_too_large` is unreachable via the router.
+Consequences: The same bad request gets the same error code from Rust and Python.
+
+## ADR-058: download-by-ref with a missing file returns 500 internal_error (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python raises `FileNotFoundError` when a signed key resolves to a library item whose file is absent from storage, and the generic handler turns it into a 500.
+Decision: Rust mirrors this exactly: missing file → 500 `internal_error`. Unknown keys stay 404 `key_not_found`; bad/expired signatures stay 403 `invalid_signature`; missing params stay 422.
+Consequences: Faithful to Python, including the upstream wart; a future product decision could map the missing-file case to 404 instead.
+
+## ADR-059: Blocked upload hashes live in the encrypted setting library.blocked_hashes (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The SHA-256 blocklist (ADR-051) needs a store admins can manage.
+Decision: The blocklist is a JSON array of lowercase hex SHA-256 digests stored in the encrypted platform setting `library.blocked_hashes` (empty default = no hashes blocked), managed by admins through the existing settings surface. A match is a hard reject (422 `file_infected`, `signature: "blocked-hash"`), not a quarantine — there is no quarantine store in the Rust app.
+Consequences: Blocking a hash is a settings write; unblocking is removing it from the array.
+
+## ADR-060: religious_place_ref and oversized integers fail 422 instead of 500 (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Where Python would 500 on a DB constraint (overlong text / out-of-range integer), Rust validates up front.
+Decision: `religious_place_ref` ≤ 128 chars; `duration_seconds`/`file_size_bytes` must fit i32 — else 422. Same ADR-024 class as the other explicit 422s in this module.
+Consequences: The 422s are strictly more helpful than Python's 500s; normal requests behave identically.
+
+## ADR-061: Certificate PDF stays a Python sidecar; the certificate record is issued natively (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `lms/certificates.py::render_certificate_pdf` needs reportlab + arabic-reshaper + python-bidi + system Arabic/Latin fonts (ADR-008). No Rust PDF crate covers the trilingual (fa/ar/en in one page), reshaped, bidi-correct layout, and faking a PDF would violate the never-fake rule.
+Decision: On course completion the Rust API issues the certificate record natively — `code` (`MA-{year}-{8 uppercase hex}`, 5 attempts then 500 `cert_code_failed`), `user_id`, `course_id`, `issued_at`, `locale`, plus the `lms.course_completed` and `lms.certificate_issued` domain events — but `pdf_storage_ref` stays NULL. A Python sidecar (the existing `render_certificate_pdf`, run as a worker against the same database) picks up certificates with `pdf_storage_ref IS NULL`, renders the PDF, stores it under `certificates/{code}.pdf`, and fills in `pdf_storage_ref`. The download routes (`GET /certificates/{code}/download`, `GET /certificates/download-by-ref` with purpose `lms-certificate`) are native and serve only bytes actually stored under the certificate's `pdf_storage_ref`; while the sidecar has not rendered the PDF they answer 404 `certificate_not_found`, exactly like Python when `pdf_storage_ref` is empty. Verify (`/certificates/{code}/verify`) and `mine` work immediately, since they never need the PDF.
+Consequences: Certificates are verifiable from the moment of issue; the PDF appears once the sidecar renders it. No PDF bytes are ever fabricated by the Rust binary. The sidecar's exact trigger (poll vs. queue) is Wave 7/8 work.
+
+## ADR-062: list_cohorts ignores the after cursor (faithful mirror of the Python quirk) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's `list_cohorts` accepts `after` but never applies it to the query — it fetches `limit+1` rows and still mints `next_cursor = _encode_cursor(0, last.id)`. The courses list, by contrast, applies its cursor correctly.
+Decision: Rust mirrors this exactly: `GET /lms/cohorts` accepts `after`, ignores it, returns the first page plus a cursor that, if followed, returns the same first page. Fixing the quirk would change pagination behaviour vs. Python and is a product decision, not a port decision.
+Consequences: Cohort pagination behaves identically (including the quirk) in both codebases; the Wave 6 tests pin the behaviour. If the user wants real cohort cursors, both codebases change together.
+
+## ADR-063: LMS LocalizedText is a loose dict[str, str], not strict fa/ar/en (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `lms/schemas.py` defines `LocalizedText = dict[str, str]` — any keys, string values only — unlike the strict `{fa, ar, en}` `LocalizedText` used by home/content (enforced by `validate::req_localized`).
+Decision: LMS titles/descriptions are validated with a loose validator (`req_text_map` / `opt_text_map`): must be a JSON object whose values are all strings; no key is required. Values are stored verbatim as JSONB.
+Consequences: `{"fa": "..."}` alone is valid for a course title, as in Python; the strict validator must not be applied to LMS fields.
+
+## ADR-064: Duplicate prerequisite / enrollment races are detected by pre-check, not by catching IntegrityError (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python maps the DB `IntegrityError` on duplicate prerequisite / concurrent enrollment to 409 (`prerequisite_exists` / `already_enrolled`). The Rust `Db` layer converts any failed statement into a plain 500 `ApiError`, so the handler cannot see the underlying UNIQUE violation.
+Decision: Handlers detect the duplicate with a SELECT before INSERT (prerequisite pair; enrollment already checks the existing row for the active case). A genuine concurrent race between the check and the insert would still surface as a 500 instead of Python's 409 — a known, untested edge — rather than inventing error plumbing in the shared `Db` layer for one wave.
+Consequences: All non-race duplicate paths return the exact Python 409s (covered by tests); the race window is documented here for Wave 7 to revisit if `Db` ever surfaces constraint errors.
+
+## ADR-065: Exact decimal/fraction arithmetic without a decimal crate (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `Cargo.toml` is outside the Wave 6 scope and no decimal crate is in the dependencies, but the calculator engines need exact decimal arithmetic (Python `Decimal`).
+Decision: `Dec` (mantissa i128 × power of 10, preserving the input exponent so `str()` matches Python's `str(Decimal)` exactly, including trailing zeros and scientific notation) and `Frac` (exact normalised fraction) are implemented in `calc_decimal.rs`. Division reproduces Python's default context (28 significant digits, ROUND_HALF_EVEN with the 29th digit + sticky); `quantize` uses ROUND_HALF_UP (ties away from zero); `floor_div` is `Decimal.__floordiv__`. There is no `f64` anywhere in the engines, so the ADR-024/040 rounding divergence does not occur in this module.
+Consequences: Calculator arithmetic is exact and byte-identical to Python's `Decimal` behaviour on the tested paths; two early implementation bugs (swapped `quantize` branches, `floor_div` sign order for negatives) were caught and fixed by unit tests in the same session.
+
+## ADR-066: NUMERIC columns via CAST AS TEXT reads and CAST(? AS NUMERIC) writes (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Following ADR-014/ADR-028, `NUMERIC(20,4)` and `NUMERIC(20,6)` columns cannot be decoded as `String` by sqlx-postgres over the binary protocol.
+Decision: NUMERIC columns are read in SELECT with `CAST(col AS TEXT)` and written in INSERT with `CAST(? AS NUMERIC(20,4|6))`. Values are formatted in the app with `Dec` (estate 4dp, prices 6dp) so sqlite and Postgres behave identically.
+Consequences: NUMERIC round-trips exactly on both backends (pinned by the Postgres smoke).
+
+## ADR-067: get_active_rule filters in Rust, not SQL (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `get_active_rule` must pick the active approved rule config for a madhhab.
+Decision: It reads all approved rows in version-descending order and filters in Rust: the effective window (`effective_from <= now < effective_to|∞`), madhhab match (inheritance: exact; zakat: `madhab IS NULL` when the input is None), and the presence of the required key in `rule_data` — following the ADR-014 guidance for expiry comparisons.
+Consequences: The same rule is active in Rust and Python for the same database state.
+
+## ADR-068: Zakat price settings read raw via get_setting (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The keys `zakat.price_source_url` and `zakat.price_ttl_seconds` are not registered in Python's `SETTING_DEFS`, so Python's `get_typed_setting` returns them raw.
+Decision: Rust reads them with `get_setting` (not `get_typed_setting`) so the URL is not parsed as JSON. TTL default 21600 seconds with a 60-second floor, matching `prices.py`.
+Consequences: Price settings behave identically, including the raw-string quirk (ADR-049 class).
+
+## ADR-069: Estate and prices formatted to 4dp/6dp in the app (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: sqlite's NUMERIC affinity drops trailing zeros (`"1200.0000"` → `1200`) while Postgres `NUMERIC(20,4)` keeps them, so the same value reads back differently on the two backends.
+Decision: `estate_value` is formatted with `fmt_fixed(4)` before INSERT and nisab prices with `fmt_fixed(6)`, so sqlite tests show exactly the Postgres behaviour. This formatting is Python's `str()` on the quantised `Decimal`, not new rounding.
+Consequences: Golden values match on both backends.
+
+## ADR-070: INTEGER columns read as i32 on Postgres (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `version` in `rule_to_out`, `get_active_rule` and `rule_update` was first read as i64; it worked on sqlite but the Postgres smoke failed with 500, because sqlx only decodes a Postgres INTEGER column as i32 (ADR-028).
+Decision: All three places read `try_get::<i32>(...) as i64`. The smoke went green.
+Consequences: Same ADR-028 class as the Wave 3/4 fixes; the rule applies to every INTEGER column in every wave.
+
+## ADR-071: Inheritance-cases cursor pagination ported faithfully, UUID-order filter with time-order sort (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's `service.list_inheritance_cases` sorts by `ORDER BY created_at DESC` but filters the cursor with `id < UUID(cursor)`; the second page is therefore UUID-ordered, not time-ordered, and may come back empty or duplicated.
+Decision: Rust reproduces this exactly (compatibility beats "fixing" it). The integration test asserts only the first page + cursor presence + the full list, not the second page's contents.
+Consequences: Pagination behaves identically (including the quirk) in both codebases; fixing it is a product decision for both codebases together.
+
+## ADR-072: kind is optional on the rule list, required on item routes (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `GET /api/v1/admin/calculators/rules` without `kind` merges both kinds and returns them by `created_at` descending (stable sort); an invalid `kind` → 422 `bad_rule_kind`. The item routes (`get/update/submit/review/history`) require `kind` (FastAPI 422 if absent) and return 404 `rule_not_found` for the wrong kind.
+Decision: Rust mirrors both behaviours exactly.
+Consequences: The same request gets the same status from Rust and Python.
+
+## ADR-073: Engine error codes unreachable via HTTP (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `invalid_gender` (miras), `invalid_transitivity` and `invalid_harf_jar` (mosaref) exist in the engines but can never surface over HTTP, because Pydantic in Python (and the equivalent validation in Rust) rejects those inputs first as 422 `validation_error`.
+Decision: The codes exist only in the engine unit tests, not in any HTTP path.
+Consequences: No HTTP test asserts them; the engine tests pin them.
+
+## ADR-074: Mosaref ported natively, not proxied (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The 1398-line mosaref engine is mechanical string construction; the Wave 6 scope includes it, and proxy-out is only for routes that cannot be ported faithfully.
+Decision: The engine is ported natively in full: the `HARF_JAR_FORMS` tables and all renderers verbatim. One port bug was caught by a unit test in the same session: in `_build_naqis` (Python line 393) the present-tense prefix vowel of the sound form is always `َ`; Rust first used `pres_ain` and produced `يُدْعُو` instead of `يَدْعُو` — fixed.
+Consequences: Mosaref needs no sidecar and no proxy; its golden fixtures pin the output.
+
+## ADR-075: Golden-fixture values vs exact engine output (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: In the zakat fixture, `zakat_coins: "0.5523"` is the display value of the source page's float; the engine's exact output is `"0.5522727272"`, and the test `test_zakat_money_is_decimal_exact` pins that. The fixture key `extra_money_at_source_price` is the source page's field name; the engine (Python and Rust) names the field `extra_money`, and the golden test performs that mapping.
+Decision: These are not divergences and must not be "fixed".
+Consequences: The golden tests pin the exact engine values; display rounding stays a presentation concern.
