@@ -56,10 +56,13 @@ mod routes_activity;
 mod routes_api_keys;
 mod routes_articles;
 mod routes_auth;
+mod routes_calculators;
 mod routes_content;
 mod routes_fatwa;
 mod routes_hifz;
 mod routes_home;
+mod routes_library;
+mod routes_lms;
 mod routes_meta;
 mod routes_quran;
 mod routes_users;
@@ -794,6 +797,57 @@ pub fn build_router(state: AppState) -> Router {
                 post(routes_hifz::data_purge),
             );
     }
+    if unit_native("LIBRARY") {
+        router = router
+            .route("/api/v1/library/items", get(routes_library::public_list))
+            .route("/api/v1/library/search", get(routes_library::search_items))
+            .route(
+                "/api/v1/library/items/{item_id}/stream",
+                get(routes_library::stream_item),
+            )
+            .route(
+                "/api/v1/library/items/{item_id}",
+                get(routes_library::public_get),
+            )
+            .route(
+                "/api/v1/library/download-by-ref",
+                get(routes_library::download_by_ref),
+            )
+            .route(
+                "/api/v1/admin/library/items",
+                get(routes_library::admin_list).post(routes_library::admin_create),
+            )
+            .route(
+                "/api/v1/admin/library/items/{item_id}",
+                get(routes_library::admin_get)
+                    .put(routes_library::admin_update)
+                    .delete(routes_library::admin_delete),
+            )
+            .route(
+                "/api/v1/admin/library/items/{item_id}/transition",
+                post(routes_library::transition_item),
+            )
+            .route(
+                "/api/v1/admin/library/items/{item_id}/versions",
+                get(routes_library::list_versions),
+            )
+            .route(
+                "/api/v1/admin/library/items/{item_id}/versions/{version}/revert",
+                post(routes_library::revert_version),
+            )
+            .route(
+                "/api/v1/admin/library/import",
+                post(routes_library::import_item),
+            )
+            .route(
+                "/api/v1/admin/library/items/{item_id}/reprocess",
+                post(routes_library::reprocess_item),
+            )
+            .route(
+                "/api/v1/admin/library/items/{item_id}/index-ai",
+                post(routes_library::index_ai),
+            );
+    }
     if unit_native("VIDEOS") {
         router = router
             .route("/api/v1/videos", get(routes_videos::public_list))
@@ -863,6 +917,115 @@ pub fn build_router(state: AppState) -> Router {
                 get(routes_videos::admin_candidates),
             );
     }
+    if unit_native("LMS") {
+        router = router
+            .route("/api/v1/lms/courses", get(routes_lms::list_courses))
+            .route(
+                "/api/v1/lms/courses/{course_id}",
+                get(routes_lms::get_course),
+            )
+            .route(
+                "/api/v1/lms/lessons/{lesson_id}",
+                get(routes_lms::get_lesson),
+            )
+            .route(
+                "/api/v1/lms/lessons/{lesson_id}/progress",
+                post(routes_lms::update_progress),
+            )
+            .route(
+                "/api/v1/lms/quiz/submit",
+                post(routes_lms::submit_lesson_quiz),
+            )
+            .route(
+                "/api/v1/lms/quiz/{lesson_id}",
+                post(routes_lms::generate_lesson_quiz),
+            )
+            .route("/api/v1/lms/reports/me", get(routes_lms::study_report))
+            .route(
+                "/api/v1/lms/recommendations",
+                get(routes_lms::recommendations),
+            )
+            .route("/api/v1/lms/cohorts", get(routes_lms::list_cohorts))
+            .route(
+                "/api/v1/lms/cohorts/{cohort_id}/enroll",
+                post(routes_lms::enroll_cohort),
+            )
+            .route(
+                "/api/v1/lms/certificates/mine",
+                get(routes_lms::my_certificate),
+            )
+            .route(
+                "/api/v1/lms/certificates/{code}/download",
+                get(routes_lms::download_certificate),
+            )
+            .route(
+                "/api/v1/lms/certificates/download-by-ref",
+                get(routes_lms::download_certificate_by_ref),
+            )
+            .route(
+                "/api/v1/lms/certificates/{code}/verify",
+                get(routes_lms::verify_certificate),
+            )
+            .route(
+                "/api/v1/certificates/{code}/verify",
+                get(routes_lms::verify_certificate),
+            )
+            .route(
+                "/api/v1/admin/lms/curricula",
+                post(routes_lms::admin_create_curriculum).get(routes_lms::admin_list_curricula),
+            )
+            .route(
+                "/api/v1/admin/lms/curricula/{mid}",
+                patch(routes_lms::admin_update_curriculum)
+                    .delete(routes_lms::admin_delete_curriculum),
+            )
+            .route(
+                "/api/v1/admin/lms/courses",
+                post(routes_lms::admin_create_course).get(routes_lms::admin_list_courses),
+            )
+            .route(
+                "/api/v1/admin/lms/courses/{mid}",
+                patch(routes_lms::admin_update_course).delete(routes_lms::admin_delete_course),
+            )
+            .route(
+                "/api/v1/admin/lms/courses/{course_id}/lessons",
+                get(routes_lms::admin_list_lessons),
+            )
+            .route(
+                "/api/v1/admin/lms/lessons",
+                post(routes_lms::admin_create_lesson),
+            )
+            .route(
+                "/api/v1/admin/lms/lessons/{mid}",
+                patch(routes_lms::admin_update_lesson).delete(routes_lms::admin_delete_lesson),
+            )
+            .route(
+                "/api/v1/admin/lms/cohorts",
+                post(routes_lms::admin_create_cohort).get(routes_lms::admin_list_cohorts),
+            )
+            .route(
+                "/api/v1/admin/lms/cohorts/{mid}",
+                patch(routes_lms::admin_update_cohort).delete(routes_lms::admin_delete_cohort),
+            )
+            .route(
+                "/api/v1/admin/lms/cohorts/{cohort_id}/enrollments",
+                get(routes_lms::admin_list_cohort_enrollments),
+            )
+            .route(
+                "/api/v1/admin/lms/prerequisites",
+                post(routes_lms::admin_add_prerequisite)
+                    .get(routes_lms::admin_list_prerequisites)
+                    .delete(routes_lms::admin_remove_prerequisite),
+            )
+            .route(
+                "/api/v1/admin/lms/users/{user_id}/progress",
+                get(routes_lms::admin_user_progress),
+            )
+            .route(
+                "/api/v1/admin/lms/certificates",
+                get(routes_lms::admin_list_certificates),
+            );
+    }
     if unit_native("VOICE") {
         router = router
             .route(
@@ -877,6 +1040,64 @@ pub fn build_router(state: AppState) -> Router {
             .route(
                 "/api/v1/admin/voice/usage",
                 get(routes_voice::list_voice_usage),
+            );
+    }
+    if unit_native("CALCULATORS") {
+        router = router
+            // Public.
+            .route(
+                "/api/v1/calculators/inheritance",
+                post(routes_calculators::inheritance_calculate),
+            )
+            .route(
+                "/api/v1/calculators/inheritance/cases",
+                post(routes_calculators::inheritance_calculate)
+                    .get(routes_calculators::inheritance_cases_list),
+            )
+            .route(
+                "/api/v1/calculators/zakat",
+                post(routes_calculators::zakat_calculate),
+            )
+            .route(
+                "/api/v1/calculators/zakat/nisab-rate",
+                get(routes_calculators::nisab_rate),
+            )
+            .route(
+                "/api/v1/calculators/zakat/extended",
+                post(routes_calculators::zakat_extended),
+            )
+            .route(
+                "/api/v1/calculators/inheritance/miras",
+                post(routes_calculators::inheritance_miras),
+            )
+            .route(
+                "/api/v1/calculators/mosaref",
+                post(routes_calculators::mosaref_conjugate),
+            )
+            // Admin: rule configs + audit.
+            .route(
+                "/api/v1/admin/calculators/rules",
+                get(routes_calculators::rule_list).post(routes_calculators::rule_create),
+            )
+            .route(
+                "/api/v1/admin/calculators/rules/{rule_id}",
+                get(routes_calculators::rule_get).patch(routes_calculators::rule_update),
+            )
+            .route(
+                "/api/v1/admin/calculators/rules/{rule_id}/submit",
+                post(routes_calculators::rule_submit),
+            )
+            .route(
+                "/api/v1/admin/calculators/rules/{rule_id}/review",
+                post(routes_calculators::rule_review),
+            )
+            .route(
+                "/api/v1/admin/calculators/rules/{rule_id}/history",
+                get(routes_calculators::rule_history),
+            )
+            .route(
+                "/api/v1/admin/calculators/audit",
+                get(routes_calculators::calculator_audit),
             );
     }
     if unit_native("META") {

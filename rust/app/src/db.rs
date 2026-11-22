@@ -788,6 +788,64 @@ CREATE TABLE library_items (
     duration_seconds INTEGER, published_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
 );
+ALTER TABLE library_items ADD COLUMN related_lesson_id UUID;
+ALTER TABLE library_items ADD COLUMN religious_place_ref TEXT;
+ALTER TABLE library_items ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE library_items ADD COLUMN ai_scopes JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE library_items ADD COLUMN include_in_fatwa_rag BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE library_items ADD COLUMN ai_indexed BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE library_items ADD COLUMN download_policy JSONB;
+ALTER TABLE library_items ADD COLUMN transcript_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE library_items ADD COLUMN ocr_text TEXT;
+ALTER TABLE library_items ADD COLUMN ocr_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE library_items ADD COLUMN processing_error TEXT;
+ALTER TABLE library_items ADD COLUMN file_size_bytes INTEGER;
+ALTER TABLE library_items ADD COLUMN mime_type TEXT;
+ALTER TABLE library_items ADD COLUMN source_type TEXT NOT NULL DEFAULT 'upload';
+ALTER TABLE library_items ADD COLUMN source_ref JSONB;
+ALTER TABLE library_items ADD COLUMN created_by UUID;
+CREATE TABLE library_item_versions (
+    id UUID PRIMARY KEY, item_id UUID NOT NULL, version INTEGER NOT NULL,
+    snapshot JSONB NOT NULL, created_by UUID,
+    created_at TIMESTAMPTZ NOT NULL, note TEXT
+);
+CREATE TABLE inheritance_rule_configs (
+    id UUID PRIMARY KEY, madhab TEXT NOT NULL, source TEXT NOT NULL,
+    version INTEGER NOT NULL, effective_from TIMESTAMPTZ NOT NULL,
+    effective_to TIMESTAMPTZ, approved_by UUID, approved_at TIMESTAMPTZ,
+    change_reason TEXT, status TEXT NOT NULL DEFAULT 'draft',
+    rule_data JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ,
+    UNIQUE(madhab, version)
+);
+CREATE TABLE zakat_rule_configs (
+    id UUID PRIMARY KEY, madhab TEXT, source TEXT NOT NULL,
+    version INTEGER NOT NULL, effective_from TIMESTAMPTZ NOT NULL,
+    effective_to TIMESTAMPTZ, approved_by UUID, approved_at TIMESTAMPTZ,
+    change_reason TEXT, status TEXT NOT NULL DEFAULT 'draft',
+    rule_data JSONB NOT NULL DEFAULT '{}',
+    asset_categories JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ,
+    UNIQUE(version)
+);
+CREATE TABLE inheritance_cases (
+    id UUID PRIMARY KEY, user_id UUID, estate_value NUMERIC(20,4) NOT NULL,
+    madhab TEXT NOT NULL, heirs JSONB NOT NULL, result JSONB NOT NULL,
+    rule_config_id UUID, idempotency_key TEXT UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE zakat_calculations (
+    id UUID PRIMARY KEY, user_id UUID, inputs JSONB NOT NULL,
+    result JSONB NOT NULL, nisab_snapshot JSONB NOT NULL,
+    rule_config_id UUID, idempotency_key TEXT UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE nisab_price_cache (
+    id UUID PRIMARY KEY, source TEXT NOT NULL UNIQUE,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    gold_per_gram NUMERIC(20,6), silver_per_gram NUMERIC(20,6),
+    fetched_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ
+);
 CREATE TABLE video_playlists (
     id UUID PRIMARY KEY, title JSONB NOT NULL, description JSONB,
     cover_media_key TEXT, scholar_id UUID, is_published BOOLEAN NOT NULL DEFAULT FALSE,
@@ -825,17 +883,49 @@ CREATE TABLE voice_usage_log (
     lang TEXT NOT NULL, stt_ms INTEGER, tts_provider TEXT,
     created_at TIMESTAMPTZ NOT NULL
 );
+CREATE TABLE curricula (
+    id UUID PRIMARY KEY, title JSONB NOT NULL, description TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0, is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL
+);
 CREATE TABLE courses (
-    id UUID PRIMARY KEY, title JSONB NOT NULL, description JSONB,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE, visibility TEXT NOT NULL DEFAULT 'public',
-    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+    id UUID PRIMARY KEY, curriculum_id UUID, title JSONB NOT NULL, description JSONB,
+    level TEXT NOT NULL DEFAULT 'beginner', visibility TEXT NOT NULL DEFAULT 'public',
+    thumbnail_media_ref TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE lessons (
+    id UUID PRIMARY KEY, course_id UUID NOT NULL, title JSONB NOT NULL,
+    body JSONB NOT NULL DEFAULT '[]', duration_minutes INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0, is_free_preview BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE user_progress (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, lesson_id UUID NOT NULL,
+    status TEXT NOT NULL DEFAULT 'not_started', position_seconds INTEGER NOT NULL DEFAULT 0,
+    completed_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(user_id, lesson_id)
+);
+CREATE TABLE certificates (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, course_id UUID NOT NULL,
+    code TEXT NOT NULL UNIQUE, issued_at TIMESTAMPTZ NOT NULL,
+    pdf_storage_ref TEXT, locale TEXT NOT NULL DEFAULT 'fa'
 );
 CREATE TABLE course_cohorts (
-    id UUID PRIMARY KEY, course_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL
+    id UUID PRIMARY KEY, course_id UUID NOT NULL, title JSONB NOT NULL,
+    starts_at TIMESTAMPTZ NOT NULL, ends_at TIMESTAMPTZ NOT NULL,
+    max_seats INTEGER NOT NULL, is_open BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL
 );
 CREATE TABLE cohort_enrollments (
-    id UUID PRIMARY KEY, cohort_id UUID NOT NULL, status TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL
+    id UUID PRIMARY KEY, cohort_id UUID NOT NULL, user_id UUID NOT NULL,
+    enrolled_at TIMESTAMPTZ NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+    UNIQUE(cohort_id, user_id)
+);
+CREATE TABLE course_prerequisites (
+    id UUID PRIMARY KEY, course_id UUID NOT NULL, requires_course_id UUID NOT NULL,
+    UNIQUE(course_id, requires_course_id)
 );
 CREATE TABLE user_reading_states (
     user_id UUID PRIMARY KEY, bookmarks JSONB NOT NULL DEFAULT '[]', last_read JSONB,
