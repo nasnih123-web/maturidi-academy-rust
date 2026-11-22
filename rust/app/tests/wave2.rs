@@ -1619,35 +1619,23 @@ async fn wave2_pg_smoke() {
         }
     };
     let db = Db::connect(&url).await.expect("pg connect");
-    for table in [
-        "users",
-        "sessions",
-        "refresh_tokens",
-        "password_reset_tokens",
-        "phone_verification_codes",
-        "recovery_codes",
-        "ws_tickets",
-        "user_activity_events",
-        "themes",
-        "platform_settings",
-        "api_keys",
-        "user_devices",
-        "web_push_subscriptions",
-        "roles",
-        "permissions",
-        "role_permissions",
-        "user_roles",
-        "user_consent",
-        "audit_logs",
-        "domain_events",
-        "notifications",
-        "notification_preferences",
-        "media_assets",
-        "fatwa_sessions",
-        "fatwa_messages",
-        "user_ayah_notes",
-        "donations",
-    ] {
+    // Drop every table `TEST_SCHEMA` creates first: the DDL is plain
+    // `CREATE TABLE`, so a leftover table from another smoke run (Wave 3
+    // uses the same database) would fail the schema apply. The table
+    // list is derived from the schema itself, so it cannot go stale.
+    // (Wave 3 added tables to the schema after this list was written.)
+    let mut tables = Vec::new();
+    for part in maturidi_api_rs::TEST_SCHEMA.split("CREATE TABLE") {
+        let name: String = part
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            tables.push(name);
+        }
+    }
+    for table in tables {
         db.execute(&format!("DROP TABLE IF EXISTS {table} CASCADE"), &[])
             .await
             .unwrap();
