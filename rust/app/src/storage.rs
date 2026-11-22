@@ -95,3 +95,27 @@ pub async fn read_bytes(config: &Config, key: &str) -> Result<Vec<u8>, ApiError>
         .await
         .map_err(|_| ApiError::not_found("not_found", "فایل یافت نشد"))
 }
+
+/// `LocalStorageProvider.get_presigned_url` — mirrors
+/// `app/core/storage.py`: `{app_base_url}{download_path}?key=...&exp=...&sig=...&purpose=...`
+/// with `sig = HMAC-SHA256("{purpose}:{key}:{exp}")` under the first
+/// signing key. The key is embedded raw, exactly like Python (no
+/// URL-encoding). Non-local providers fail with 503
+/// `storage_not_configured` (ADR-015).
+pub fn presigned_url(
+    config: &Config,
+    key: &str,
+    expires_seconds: i64,
+    download_path: &str,
+    purpose: &str,
+) -> Result<String, ApiError> {
+    let _ = local_base_dir(config)?;
+    let exp = chrono::Utc::now().timestamp() + expires_seconds;
+    let msg = format!("{purpose}:{key}:{exp}");
+    let keys = storage_signing_keys(config);
+    let sig = hmac_sha256_hex(keys[0].as_bytes(), msg.as_bytes());
+    let base = config.app_base_url.trim_end_matches('/');
+    Ok(format!(
+        "{base}{download_path}?key={key}&exp={exp}&sig={sig}&purpose={purpose}"
+    ))
+}

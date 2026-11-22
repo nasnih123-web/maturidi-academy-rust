@@ -140,7 +140,7 @@ async fn ai_int_setting(state: &AppState, key: &str, default: i64) -> i64 {
     }
 }
 
-async fn check_quota(
+pub(crate) async fn check_quota(
     state: &AppState,
     endpoint: &str,
     user: Option<&AuthCtx>,
@@ -217,7 +217,7 @@ async fn check_quota(
     Ok(())
 }
 
-async fn log_usage(
+pub(crate) async fn log_usage(
     db: &Db,
     user_id: Option<Uuid>,
     endpoint: &str,
