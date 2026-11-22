@@ -1,0 +1,1 @@
+{"auth":"admin","body":null,"case":"admin-content.items GET with malformed cursor (400 invalid_cursor)","expected":{"error":{"code":"invalid_cursor"}},"expected_status":400,"method":"GET","path":"/api/v1/admin/content/items?cursor=!!!"}

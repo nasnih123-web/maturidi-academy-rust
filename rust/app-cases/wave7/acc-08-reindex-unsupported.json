@@ -1,0 +1,1 @@
+{"auth":"admin","body":null,"case":"admin-content.ai-sources reindex on a non-library adapter (422 reindex_unsupported)","expected":{"error":{"code":"reindex_unsupported"}},"expected_status":422,"method":"POST","path":"/api/v1/admin/content/ai-sources/lms/course/00000000-0000-0000-0000-000000000000/reindex"}

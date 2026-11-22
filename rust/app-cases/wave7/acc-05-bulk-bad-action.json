@@ -1,0 +1,1 @@
+{"auth":"admin","body":{"action":"nope","items":[{"content_type":"library_item","domain":"library","id":"00000000-0000-0000-0000-000000000000"}],"params":{}},"case":"admin-content.bulk POST with unknown action (422 bad_bulk_action)","expected":{"error":{"code":"bad_bulk_action"}},"expected_status":422,"method":"POST","path":"/api/v1/admin/content/bulk"}

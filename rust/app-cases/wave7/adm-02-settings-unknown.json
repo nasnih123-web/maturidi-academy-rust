@@ -1,0 +1,17 @@
+{
+  "case": "admin.settings PUT unknown key (400 unknown_setting)",
+  "auth": "platform.settings",
+  "method": "PUT",
+  "path": "/api/v1/admin/settings",
+  "body": {
+    "settings": {
+      "no.such.key": "x"
+    }
+  },
+  "expected_status": 400,
+  "expected": {
+    "error": {
+      "code": "unknown_setting"
+    }
+  }
+}

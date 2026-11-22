@@ -1,0 +1,1 @@
+{"auth":"admin","body":null,"case":"admin-content.items GET with bad distribution channel (422 bad_channel)","expected":{"error":{"code":"bad_channel"}},"expected_status":422,"method":"GET","path":"/api/v1/admin/content/items?distribution_channel=nope"}

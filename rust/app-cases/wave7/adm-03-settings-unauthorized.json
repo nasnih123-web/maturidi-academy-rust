@@ -1,0 +1,13 @@
+{
+  "case": "admin.settings GET without token (401 unauthorized)",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/admin/settings",
+  "body": null,
+  "expected_status": 401,
+  "expected": {
+    "error": {
+      "code": "unauthorized"
+    }
+  }
+}

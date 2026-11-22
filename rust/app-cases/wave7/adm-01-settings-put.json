@@ -1,0 +1,19 @@
+{
+  "case": "admin.settings PUT localized value (platform.settings, 200, key echoed in updated)",
+  "auth": "platform.settings",
+  "method": "PUT",
+  "path": "/api/v1/admin/settings",
+  "body": {
+    "settings": {
+      "branding.app_display_name": {
+        "fa": "آکادمی تست"
+      }
+    }
+  },
+  "expected_status": 200,
+  "expected": {
+    "updated": [
+      "branding.app_display_name"
+    ]
+  }
+}

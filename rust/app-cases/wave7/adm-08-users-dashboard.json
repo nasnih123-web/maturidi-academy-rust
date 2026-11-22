@@ -1,0 +1,12 @@
+{
+  "case": "admin.users dashboard (users.view360, 200, default pagination)",
+  "auth": "users.view360",
+  "method": "GET",
+  "path": "/api/v1/admin/users/dashboard",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "limit": 20,
+    "offset": 0
+  }
+}

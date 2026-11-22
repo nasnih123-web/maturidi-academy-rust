@@ -1,0 +1,13 @@
+{
+  "case": "admin.connections status (connections.test, 200, payment unconfigured)",
+  "auth": "connections.test",
+  "method": "GET",
+  "path": "/api/v1/admin/connections/status",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "payment": {
+      "configured": false
+    }
+  }
+}

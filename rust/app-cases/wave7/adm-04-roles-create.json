@@ -1,0 +1,14 @@
+{
+  "case": "admin.roles create (roles.manage, 201, empty permissions)",
+  "auth": "roles.manage",
+  "method": "POST",
+  "path": "/api/v1/admin/roles",
+  "body": {
+    "name": "moderator"
+  },
+  "expected_status": 201,
+  "expected": {
+    "name": "moderator",
+    "permissions": []
+  }
+}

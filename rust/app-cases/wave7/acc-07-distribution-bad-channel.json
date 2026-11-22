@@ -1,0 +1,1 @@
+{"auth":"admin","body":{"channel":"nope","enabled":true},"case":"admin-content.distribution PUT with unknown channel (422 bad_channel)","expected":{"error":{"code":"bad_channel"}},"expected_status":422,"method":"PUT","path":"/api/v1/admin/content/distribution?domain=library&content_type=library_item&id=00000000-0000-0000-0000-000000000000"}

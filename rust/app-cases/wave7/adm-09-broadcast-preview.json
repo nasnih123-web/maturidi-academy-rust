@@ -1,0 +1,20 @@
+{
+  "case": "admin.notifications preview (notifications.broadcast, 200, dry run, no send)",
+  "auth": "notifications.broadcast",
+  "method": "POST",
+  "path": "/api/v1/admin/notifications/preview",
+  "body": {
+    "title": "سلام",
+    "body": "خبر مهم",
+    "channels": [
+      "in_app"
+    ],
+    "cohort": {
+      "type": "all"
+    }
+  },
+  "expected_status": 200,
+  "expected": {
+    "dry_run": true
+  }
+}

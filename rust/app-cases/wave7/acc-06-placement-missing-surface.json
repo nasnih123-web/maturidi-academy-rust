@@ -1,0 +1,1 @@
+{"auth":"admin","body":{"content_id":"00000000-0000-0000-0000-000000000000","content_type":"library_item","domain":"library","surface":""},"case":"admin-content.placements PUT with empty surface (422 missing_surface)","expected":{"error":{"code":"missing_surface"}},"expected_status":422,"method":"PUT","path":"/api/v1/admin/content/placements"}

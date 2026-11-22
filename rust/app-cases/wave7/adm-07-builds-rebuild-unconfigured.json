@@ -1,0 +1,15 @@
+{
+  "case": "admin.builds rebuild without provider (503 build_provider_not_configured, no row created)",
+  "auth": "builds.manage",
+  "method": "POST",
+  "path": "/api/v1/admin/builds/rebuild",
+  "body": {
+    "platform": "android"
+  },
+  "expected_status": 503,
+  "expected": {
+    "error": {
+      "code": "build_provider_not_configured"
+    }
+  }
+}

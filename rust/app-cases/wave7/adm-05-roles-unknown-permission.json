@@ -1,0 +1,18 @@
+{
+  "case": "admin.roles create with unknown permission key (422 unknown_permission, no role created)",
+  "auth": "roles.manage",
+  "method": "POST",
+  "path": "/api/v1/admin/roles",
+  "body": {
+    "name": "bad-role",
+    "permission_keys": [
+      "no.such.perm"
+    ]
+  },
+  "expected_status": 422,
+  "expected": {
+    "error": {
+      "code": "unknown_permission"
+    }
+  }
+}

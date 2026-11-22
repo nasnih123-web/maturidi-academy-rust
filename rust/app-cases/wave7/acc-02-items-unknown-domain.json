@@ -1,0 +1,1 @@
+{"auth":"admin","body":null,"case":"admin-content.items GET with unknown domain (404 adapter_not_found)","expected":{"error":{"code":"adapter_not_found"}},"expected_status":404,"method":"GET","path":"/api/v1/admin/content/items?domain=nope"}
