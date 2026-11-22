@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"pr1.cutover step 7: missing static file is a 404","expected":{"error":{"code":"http_error","message":"Not Found"}},"expected_status":404,"method":"GET","path":"/static/__cutover_probe__.woff2"}

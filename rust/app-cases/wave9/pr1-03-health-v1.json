@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"pr1.cutover step 7: /api/v1/health reports media tools unavailable","expected":{"api":"v1","media_tools":{"missing":["ffmpeg","ffprobe","tesseract","pdftoppm","faster-whisper"],"ready":false},"status":"ok"},"expected_status":200,"method":"GET","path":"/api/v1/health"}
