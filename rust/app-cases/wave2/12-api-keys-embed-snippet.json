@@ -1,0 +1,9 @@
+{
+  "case": "api_keys.embed-snippet",
+  "auth": "bearer-admin",
+  "method": "GET",
+  "path": "/api/v1/api-keys/<uuid>/embed-snippet?widget=prayer-times&base_url=https://example.com",
+  "body": null,
+  "expected_status": 200,
+  "expected": {"widget": "prayer-times", "html": "<contains base_url and 'اوقات شرعی', no raw mk_ key>"}
+}

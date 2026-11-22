@@ -1,0 +1,8 @@
+{
+  "case": "auth.refresh rotates; replaying the old token is 401 (reuse revokes the session)",
+  "method": "POST",
+  "path": "/api/v1/auth/refresh",
+  "body": {"refresh_token": "<opaque>"},
+  "expected_status": 200,
+  "expected": {"token_type": "bearer", "access_token": "<jwt>", "refresh_token": "<opaque-new>"}
+}

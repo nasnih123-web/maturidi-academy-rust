@@ -1,0 +1,9 @@
+{
+  "case": "api_keys.create (admin, api_keys.manage)",
+  "auth": "bearer-admin",
+  "method": "POST",
+  "path": "/api/v1/api-keys",
+  "body": {"name": "widget key", "scopes": ["prayer-times"], "rate_limit_per_min": 60, "quota_monthly": 10000},
+  "expected_status": 201,
+  "expected": {"key": "<mk_... shown only once>", "key_prefix": "<8 chars>", "scopes": ["prayer-times"]}
+}

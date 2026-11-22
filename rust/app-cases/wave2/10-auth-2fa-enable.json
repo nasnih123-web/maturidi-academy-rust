@@ -1,0 +1,9 @@
+{
+  "case": "auth.2fa.enable",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/auth/2fa/enable",
+  "body": {"secret": "<base32-totp-secret>", "code": "<6-digit-totp>"},
+  "expected_status": 200,
+  "expected": {"recovery_codes": ["<XXXX-XXXX x10>"]}
+}

@@ -1,0 +1,9 @@
+{
+  "case": "meta.i18n.detect arabic",
+  "method": "GET",
+  "path": "/api/v1/i18n/detect",
+  "headers": {"accept-language": "ar-EG,ar;q=0.9"},
+  "body": null,
+  "expected_status": 200,
+  "expected": {"locale": "ar"}
+}

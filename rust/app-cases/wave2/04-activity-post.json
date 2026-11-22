@@ -1,0 +1,9 @@
+{
+  "case": "activity.post media_play",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/activity/events",
+  "body": {"kind": "media_play", "title": "درس اول", "ref_type": "video", "ref_id": "42", "meta": {"position": 12}},
+  "expected_status": 201,
+  "expected": {"kind": "media_play", "id": "<uuid>"}
+}

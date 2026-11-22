@@ -1,0 +1,8 @@
+{
+  "case": "auth.login",
+  "method": "POST",
+  "path": "/api/v1/auth/login",
+  "body": {"identifier": "user@example.com", "password": "<password>"},
+  "expected_status": 200,
+  "expected": {"token_type": "bearer", "must_enroll_2fa": false, "access_token": "<jwt>", "refresh_token": "<opaque>"}
+}

@@ -1,0 +1,9 @@
+{
+  "case": "admin.users list (admin, users.manage)",
+  "auth": "bearer-admin",
+  "method": "GET",
+  "path": "/api/v1/admin/users?limit=10",
+  "body": null,
+  "expected_status": 200,
+  "expected": {"items": "<array>", "next_cursor": "<string|null>"}
+}

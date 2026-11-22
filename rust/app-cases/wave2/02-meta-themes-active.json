@@ -1,0 +1,11 @@
+{
+  "case": "meta.themes.active default theme",
+  "method": "GET",
+  "path": "/api/v1/themes/active",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "name": {"fa": "پیش‌فرض", "ar": "الافتراضي", "en": "Default"},
+    "is_active": true
+  }
+}

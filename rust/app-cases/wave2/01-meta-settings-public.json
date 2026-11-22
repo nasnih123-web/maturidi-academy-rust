@@ -1,0 +1,19 @@
+{
+  "case": "meta.settings.public defaults",
+  "method": "GET",
+  "path": "/api/v1/settings/public",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "version": 0,
+    "turnstile_site_key": null,
+    "settings": {
+      "quran.madhhab_default": "hanafi",
+      "videos.subtitle_langs": ["fa", "ar", "en", "ur", "dari"],
+      "home.sections": [],
+      "places.globe.defaultLat": 21.4225,
+      "places.globe.defaultLng": 39.8262,
+      "push.vapid_public_key": null
+    }
+  }
+}

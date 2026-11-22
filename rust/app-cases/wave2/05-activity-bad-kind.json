@@ -1,0 +1,9 @@
+{
+  "case": "activity.post unknown kind",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/activity/events",
+  "body": {"kind": "unknown_kind"},
+  "expected_status": 422,
+  "expected": {"error": {"code": "bad_event_kind"}}
+}

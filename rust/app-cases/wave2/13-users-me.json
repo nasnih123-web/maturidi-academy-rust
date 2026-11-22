@@ -1,0 +1,9 @@
+{
+  "case": "users.me get + patch",
+  "auth": "bearer",
+  "method": "GET",
+  "path": "/api/v1/users/me",
+  "body": null,
+  "expected_status": 200,
+  "expected": {"email": "user@example.com", "profile_complete": false}
+}
