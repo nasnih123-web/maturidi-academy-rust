@@ -104,9 +104,15 @@ The honest path for a pure Rust server is:
   `cargo test` incl. Postgres smoke): quran + hifz are answered natively in
   Rust; everything else still proxies. Kill switch per module:
   `RUST_ANYTHING_UNIT_<QURAN|HIFZ>=original` falls back to the Python
-  origin. Details: ADR-031 – ADR-043. Total native routes: 205
-  (Wave 2: 49, Wave 3: 81, Wave 4: 75 — quran 23 + hifz 52; plus the
-  Wave 1 front door `GET /health` + `GET /ready`).
+  origin. Details: ADR-031 – ADR-043.
+- Wave 5 (done, verified green locally — `cargo fmt`, `clippy -D warnings`,
+  `cargo test` incl. Postgres smoke): videos + voice are answered natively
+  in Rust; everything else still proxies. Kill switch per module:
+  `RUST_ANYTHING_UNIT_<VIDEOS|VOICE>=original` falls back to the Python
+  origin. Details: ADR-044 – ADR-050. Total native routes: 232
+  (Wave 2: 49, Wave 3: 81, Wave 4: 75 — quran 23 + hifz 52; Wave 5: 27 —
+  videos 23 + voice 4; plus the Wave 1 front door `GET /health` +
+  `GET /ready`).
   - quran: `GET /api/v1/quran/surahs`, `/surah/{number}`,
     `/ayah/{surah}/{ayah}`, `/recitation/reciters`,
     `/recitation/timing/generated`, `/recitation/timing`, `/providers`,
@@ -152,6 +158,31 @@ The honest path for a pure Rust server is:
     `POST /api/v1/quran/hifz/tests/{id}/questions/{qid}/answer` stay
     proxied; the live stream `GET .../attempts/{id}/stream` is
     registered explicitly as 503 `hifz_live_unavailable`.
+  - videos: `GET /api/v1/videos`, `/playlists`, `/playlists/{id}`,
+    `/saved`, `GET|POST|DELETE /api/v1/videos/{id}/saved`,
+    `GET /api/v1/videos/{id}`, `/subtitles/{lang}.vtt`,
+    `GET|PUT /api/v1/videos/{id}/progress`,
+    `GET|POST /api/v1/admin/videos/playlists`,
+    `PATCH|DELETE /api/v1/admin/videos/playlists/{id}`,
+    `POST /api/v1/admin/videos/playlists/{id}/items`,
+    `DELETE .../items/{item_id}`,
+    `PUT .../items/order`, `GET /api/v1/admin/videos/subtitles`,
+    `POST /api/v1/admin/videos/{id}/subtitles/generate`,
+    `GET|PUT /api/v1/admin/videos/{id}/subtitles/{lang}`,
+    `GET /api/v1/admin/videos/candidates`
+  - voice: `GET /api/v1/voice/tts-audio-by-ref`,
+    `GET|PUT /api/v1/admin/voice/settings`,
+    `GET /api/v1/admin/voice/usage`
+  - Intentionally NOT native (ADR-046): `POST /api/v1/voice/transcribe`
+    and `POST /api/v1/voice/ask` stay proxied (no STT in the Rust
+    binary). Voice intents + TTS are ported as modules (ADR-047);
+    audio lessons are Wave 6 LMS (ADR-048).
+  - Tests: `rust/app/tests/wave5.rs` (15 tests, sqlite in-memory;
+    `wave5_pg_smoke` replays the critical path on local Postgres when
+    `WAVE2_PG_URL` is set) plus unit tests in `voice_intents.rs`
+    (5), `voice_tts.rs` (6, incl. a mock cloud TTS endpoint),
+    `subtitles.rs` (4), `video_links.rs` (2). Cases:
+    `rust/app-cases/wave5/` (14 cases).
   - Tests: `rust/app/tests/wave4.rs` (24 tests, sqlite in-memory;
     `wave4_pg_smoke` replays the critical path on local Postgres when
     `WAVE2_PG_URL` is set). Cases: `rust/app-cases/wave4/` (15 cases).
