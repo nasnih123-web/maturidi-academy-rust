@@ -86,6 +86,43 @@ The honest path for a pure Rust server is:
 - Confirm how to treat the hard dependencies above (sidecar / external service / reimplement / drop).
 - Confirm equivalence bar for floats, error text, validation errors (Pydantic errors will differ in Rust).
 
+## Port progress — Wave 1 + Wave 2 native (2026-11-22)
+
+- Wave 1 (done, verified green locally): Axum front door, `GET /health`,
+  `GET /ready`, proxy fallback to `ORIGIN_URL`. See ADR-007 / ADR-013.
+- Wave 2 (done, verified green locally — `cargo fmt`, `clippy -D warnings`,
+  `cargo test` incl. Postgres smoke): meta, activity, api_keys, users, auth
+  are answered natively in Rust; everything else still proxies. Kill switch
+  per module: `RUST_ANYTHING_UNIT_<META|ACTIVITY|API_KEYS|USERS|AUTH>=original`
+  falls back to the Python origin. Details: ADR-014 – ADR-017.
+  - meta: `GET /api/v1/themes/active`, `GET /api/v1/settings/public`,
+    `GET /api/v1/i18n/detect`
+  - activity: `POST /api/v1/activity/events`
+  - api_keys: `POST|GET /api/v1/api-keys`, `GET|PATCH /api/v1/api-keys/{id}`,
+    `POST /api/v1/api-keys/{id}/revoke`, `GET /api/v1/api-keys/{id}/usage`,
+    `GET /api/v1/api-keys/{id}/embed-snippet`
+  - users: `GET|PATCH|DELETE /api/v1/users/me`, `POST /api/v1/users/me/avatar`,
+    `GET /api/v1/users/me/sessions`, `DELETE /api/v1/users/me/sessions/{id}`,
+    `GET /api/v1/users/me/consent`, `POST /api/v1/users/me/export`,
+    `GET /api/v1/admin/users`, `POST /api/v1/users/me/devices`,
+    `GET /api/v1/notifications/web-push/vapid-key`,
+    `POST|DELETE /api/v1/users/me/web-push/subscriptions`,
+    `GET /api/v1/users/me/notifications`,
+    `POST /api/v1/users/me/notifications/{id}/read`,
+    `GET /api/v1/users/avatar-by-ref`
+  - auth: `POST /api/v1/auth/register`, `login`, `refresh`, `logout`,
+    `logout-all`, `verify-email`, `register/verify-email`,
+    `register/phone-code/request`, `register/phone-code/verify`,
+    `register/set-password`, `register/resend`, `verify-phone/request`,
+    `verify-phone`, `password-reset/request`, `password-reset/confirm`,
+    `2fa/setup`, `2fa/enable`, `2fa/recover`, `2fa/status`, `2fa/disable`,
+    `2fa/recovery/regenerate`, `ws-ticket`
+  - Tests: `rust/app/tests/wave2.rs` (26 tests, sqlite in-memory;
+    `wave2_pg_smoke` replays the critical path on local Postgres when
+    `WAVE2_PG_URL` is set). Cases: `rust/app-cases/wave2/` (14 cases).
+  - Not yet ported in Wave 2 (stubs / Wave 7): real mail/SMS delivery,
+    ClamAV scan, S3 storage (see ADR-015).
+
 ## Units (status)
 
 All `open` until the user confirms the plan. No unit claimed yet.

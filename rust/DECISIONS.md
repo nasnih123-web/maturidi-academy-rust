@@ -157,3 +157,105 @@ Decision:
   (`status`, `env`, `db`, `redis`), byte-for-byte, not alphabetically sorted.
 Consequences: `/health` and `/ready` match the Python wire shape exactly;
 the proxy fails closed with a clear 502 instead of hanging or crashing.
+
+## ADR-014: DB layer — `Db::{Pg, Sqlite}` enum instead of `sqlx::any::AnyPool` (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Wave 2 needs `Uuid`, `DateTime<Utc>` and JSON values in queries.
+`sqlx::any::Any` only implements those types for bool/int/float/string/blob
+(`sqlx-core-0.8.6/src/any/types/`), so `AnyPool` cannot express the Wave 2
+queries at all (49 type errors after the first compile pass).
+Decision:
+- One `Db` enum (`Pg(PgPool)` / `Sqlite(SqlitePool)`) with a single query
+  API: `fetch_optional` / `fetch_one` / `fetch_all` / `execute`, taking one
+  SQL string with `?` placeholders (rewritten to `$1..$n` for Postgres) and
+  a slice of `Arg`s; rows come back as `DynRow` with the same `try_get`
+  call on both backends.
+- IDs and timestamps are always generated in Rust (`Uuid::new_v4`,
+  `Utc::now`) and bound explicitly; no `RETURNING` clause anywhere.
+- Expiry comparisons happen in Rust, never in SQL (the engines store
+  timestamps differently).
+- `Arg::Null` is typed (`NullText` / `NullUuid` / `NullTime` / `NullJson` /
+  `NullBool` / `NullInt` / `NullFloat`); `Option<T>` maps `None` to
+  `T::null_arg()`. A text-typed NULL is rejected by Postgres for jsonb /
+  uuid / timestamptz columns, so an untyped NULL is never bound.
+- `TEST_SCHEMA` column types match what the app binds and reads, not just
+  the production names: id / FK columns are `UUID`, timestamps are
+  `TIMESTAMPTZ`, JSON-bound columns are `JSONB` (sqlite tolerates the
+  unknown type names). Two deliberate deviations from production:
+  `domain_events.aggregate_id` and `audit_logs.entity_id` stay `TEXT`
+  (production: `String(128)` / `String(512)` — the app binds text), and
+  `platform_settings.value` stays `TEXT` (the app only ever handles the
+  envelope as opaque text).
+- Boolean SQL literals are always `TRUE` / `FALSE`, never `0` / `1`:
+  Postgres boolean columns reject `revoked = 0`, sqlite accepts both.
+- `Uuid` values are always bound as `Uuid`, never as text: on sqlite sqlx
+  stores `Uuid` as a BLOB, so a text-bound id never matches a uuid-bound
+  one (`WHERE id = ?` silently returns no rows) and `try_get::<Uuid>` fails
+  on text-stored ids. All id columns, seeds and tests bind `Uuid`.
+- `TEST_SCHEMA` (in `db.rs`) mirrors the production models with TEXT /
+  INTEGER / BOOLEAN / TIMESTAMPTZ-neutral types so the same DDL applies to
+  the sqlite test pool and to a local Postgres test database.
+Consequences: the same Rust code runs against production Postgres and the
+sqlite test pool; the `TRUE`/`FALSE` + `Arg::Null` + `Uuid`-bind rules are
+port invariants for every later wave.
+
+## ADR-015: Mail/SMS are stubs; avatar scan fails closed; S3 not ported (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The real Rust mailer/SMS sender, ClamAV client and S3 storage are
+not ported in Wave 2.
+Decision:
+- `send_email` / `send_sms` only log and report success. The observable
+  behaviour matches Python (tokens are stored, flows continue, resend
+  works); real delivery comes with the full mailer in Wave 7.
+- Avatar upload without the dev bypass fails closed with 503
+  `antivirus_unavailable`, exactly like Python when no scanner is
+  reachable; it passes only when `CLAMAV_ALLOW_INSECURE_DEV_BYPASS=true`
+  and `APP_ENV=dev`.
+- Only the `local` storage provider is implemented; any other
+  `STORAGE_PROVIDER` is rejected with 503 `storage_not_configured`
+  (avatar upload, avatar-by-ref, `put_object` / `read_bytes`).
+Consequences: Wave 2 is behaviourally complete for tests, but no real email
+/ SMS / virus scan / S3 happens until Wave 7.
+
+## ADR-016: Wave 2 verification findings — two port bugs fixed by tests (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The Wave 2 integration tests (`rust/app/tests/wave2.rs`) caught two
+bugs in the ported code that no compile check could catch.
+Decision (both fixed in Wave 2, with regression tests):
+1. `fetch_token_row` (`auth_service.rs`) compared the RAW token against the
+   `token_hash` column, but inserts store `hash_token(raw)` (SHA-256 hex).
+   Verify-email, register-verify-email, set-password and password-reset
+   could never find their tokens (always 400 `invalid_token`). The lookup
+   now hashes its argument first.
+2. `verify_embed_token` (`routes_api_keys.rs`) padded the base64url payload
+   with `len % 4` `'='` chars; a payload with `len % 4 == 3` needs 1 pad
+   char, not 3, so roughly a third of issued embed tokens failed
+   verification. It now decodes with the NO_PAD engine directly.
+Consequences: token and embed-token roundtrips are covered by tests; any
+later change to token handling must keep those tests green.
+
+## ADR-017: Wave 2 test strategy (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Tests must prove the native routes without touching the live API
+or any production database, and must cover both SQL engines the `Db` enum
+supports.
+Decision:
+- Primary suite: `rust/app/tests/wave2.rs` — fresh in-memory sqlite per
+  test (`TEST_SCHEMA` + `init_test_schema`), real Axum router via
+  `oneshot`, `ConnectInfo` injected for the peer-IP extractors. Covers
+  meta, activity, api_keys (incl. the `validate_key` /
+  `validate_embed_token` guards), users and auth end-to-end (register →
+  login → refresh rotation + reuse detection → 2FA enrol/login/recovery →
+  logout/logout-all → verify-email → password reset → WS ticket).
+- Postgres smoke: `wave2_pg_smoke` in the same file, gated on
+  `WAVE2_PG_URL`, replays register → login → refresh → activity →
+  settings-public against a local Postgres test database (schema dropped
+  and re-applied first). A local Postgres 16 cluster was installed for
+  this on the dev VM (`maturidi_test` database).
+- HTTP cases for `app record` / `app replay` live in
+  `rust/app-cases/wave2/` (14 cases).
+- TOTP anti-replay is real: a second code in the same 30 s step is
+  `code_reused`, so tests that log in twice with TOTP sleep to the next
+  step boundary (`sleep_until_next_totp_step`).
+Consequences: `cargo test` is green on sqlite by default; the Postgres
+smoke runs whenever `WAVE2_PG_URL` is set.
