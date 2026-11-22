@@ -820,3 +820,345 @@ Status: accepted
 Context: In the zakat fixture, `zakat_coins: "0.5523"` is the display value of the source page's float; the engine's exact output is `"0.5522727272"`, and the test `test_zakat_money_is_decimal_exact` pins that. The fixture key `extra_money_at_source_price` is the source page's field name; the engine (Python and Rust) names the field `extra_money`, and the golden test performs that mapping.
 Decision: These are not divergences and must not be "fixed".
 Consequences: The golden tests pin the exact engine values; display rounding stays a presentation concern.
+
+## ADR-076: Finance receipt PDF stays proxied (FIN-01) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `GET /api/v1/finance/receipts/{id}` renders a trilingual receipt PDF with reportlab + arabic-reshaper + python-bidi + system fonts (ADR-008 / ADR-061 class).
+Decision: The route stays proxied so the Python origin keeps rendering it for real, instead of answering an honest 503 for a working feature (ADR-046 precedent).
+Consequences: No native receipt-PDF route exists; the proxy fallback must stay for this path until a Rust renderer exists.
+
+## ADR-077: Receipt images go through the Wave 6 scan gate (FIN-02) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's finance module itself never scanned receipt images. The Rust port applies the Wave 6 scan gate (ADR-051: SHA-256 blocklist + EICAR + pending/review workflow) to receipt uploads — a deliberate, task-directed hardening, not a Python behaviour.
+Decision: A scan hit is 422 `file_infected` with an audit row `finance.upload_rejected_infected`.
+Consequences: Receipt uploads are stricter than Python. Merge check (resolved 2026-11-22): the reported signature name `"Eicar-Test-Signature"` matches Python `core/antivirus.py` (`"stream: Eicar-Test-Signature FOUND"`); ADR-051's `EICAR-STANDARD-ANTIVIRUS-TEST-FILE` is the byte-pattern fragment inside the EICAR test file, not the reported name. There is no discrepancy and no code change.
+
+## ADR-078: ZarinPal + IDPay live over HTTPS (FIN-03) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Online donation intents need the real gateways; a sandbox or stub would silently take no money.
+Decision: ZarinPal and IDPay request + verify run live over HTTPS against the providers, with the same intent/callback flow as Python. No sandbox mode exists in the Rust binary.
+Consequences: Gateway credentials must be configured for donations to work; an unconfigured gateway answers 503 `gateway_unconfigured`.
+
+## ADR-079: FX rates via Wallex/CoinGecko with exact string-decimal math (FIN-04) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: FX conversion touches real money; float arithmetic would drift from Python's exact decimal results.
+Decision: Rates come from Wallex/CoinGecko over HTTPS and all conversion math uses exact string-decimal arithmetic (no f64 anywhere in the path), mirroring Python.
+Consequences: FX results match Python to the last digit; a provider outage surfaces as an honest error, never a stale invented rate.
+
+## ADR-080: Reconciliation honestly 503s when it cannot run (FIN-05) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Reconciliation needs live gateway statements; there is no local equivalent to compute it from.
+Decision: When reconciliation cannot run (no gateway access / no statements), the endpoint answers an honest 503 instead of returning a fabricated reconciled state.
+Consequences: Operators see the outage instead of a false "all matched" report.
+
+## ADR-081: `donations.payment_intent_id` added; amounts stay INTEGER (FIN-06) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Donation intents need a join key to the gateway intent; Python's `donations` table has no `payment_intent_id` column in the test schema.
+Decision: TEST_SCHEMA gains `ALTER TABLE donations ADD COLUMN payment_intent_id UUID`. `donations.amount` stays INTEGER per ADR-028 (i32 on Postgres, read as i32).
+Consequences: Intent lookup is a single indexed column; no amount-precision change anywhere.
+
+## ADR-082: Multipart 2 MB default disabled for `POST /donate/manual` only (FIN-07) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Axum's `Multipart` extractor defaults to a 2 MB body limit; a manual donation with a receipt image can legitimately exceed it.
+Decision: `DefaultBodyLimit::disable()` is layered on `POST /api/v1/finance/donate/manual` only. The same latent 2 MB cap affects Wave 6 library uploads and is a follow-up, not touched here.
+Consequences: Large receipt images upload; every other route keeps the default limit.
+
+## ADR-083: Idempotency-key replay and `_finalize_success` re-entrancy (FIN-08) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: A retried callback or a double-submitted intent must not create a second donation.
+Decision: Ported exactly — replaying an intent's idempotency key returns the stored result, and `_finalize_success` is re-entrant: one donation + one ledger row per intent, campaign credit in IRR.
+Consequences: Double-charging by retry is impossible in Rust exactly as in Python.
+
+## ADR-084: Manual-approve FX conversion — manual rate wins (FIN-09) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Approving a manual (card/crypto/PayPal) donation converts its amount to IRR; Python prefers the rate the admin typed over the live rate.
+Decision: The manual rate takes precedence over the live rate, with the `manual:<intent_id>` fallback reference kept verbatim.
+Consequences: Admin-entered rates are honoured exactly as in Python; the fallback reference is stable across both stacks.
+
+## ADR-085: Recurring donations are registration-only (FIN-10) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Periodic charging is the ARQ worker's job in Python; there is no charging loop in the Rust binary.
+Decision: The Rust API registers recurring donations natively; it never charges them. Charging stays a Python sidecar concern.
+Consequences: A recurring donation registered in Rust is charged by the Python worker exactly as before; no charge is ever faked.
+
+## ADR-086: Gateway statuses and donation methods are native reads (FIN-11) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Gateway status and the donation-methods list are settings/DB reads; no provider ping is needed to answer them.
+Decision: Both are served natively from settings and the database. No liveness ping to a gateway is performed or faked.
+Consequences: The endpoints answer even when a gateway is down; they report configuration, not liveness.
+
+## ADR-087: Admin `/rebuild` is a real GitHub `workflow_dispatch`, never a shell (ADM-01) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The builds rebuild endpoint must trigger a real rebuild; shelling out from the API binary would be a command-injection surface and would not work in the Rust deploy.
+Decision: Rebuild dispatches a real GitHub Actions `workflow_dispatch` over HTTPS. No shell is ever spawned.
+Consequences: A rebuild needs a configured GitHub token; without one the endpoint answers 503 instead of pretending to rebuild.
+
+## ADR-088: Release download URLs for `artifact_key` rows cannot be presigned (ADM-02) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The builds bucket is MinIO/S3, which the Rust binary does not own (ADR-015: no S3 in the Rust binary).
+Decision: Release creation is native, but download URLs for `artifact_key` rows are not presigned in Rust; the field is left for the Python origin.
+Consequences: Release rows are complete except for a presigned URL; no URL is ever fabricated.
+
+## ADR-089: AI/Telegram connectivity tests report honestly (ADM-03) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: A connectivity test that cannot reach the provider must not claim success.
+Decision: The AI and Telegram connectivity tests report what they can actually verify; when the provider cannot be reached they say so instead of faking a ping.
+Consequences: A green test means a real check passed; a red test is a real outage, not a stub.
+
+## ADR-090: Admin rate limits are NOT enforced in Rust (ADM-04) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python throttles some admin endpoints at 20–30/min; no prior wave wires route-level rate limits in the Rust binary, so there is no shared limiter to reuse.
+Decision: Admin rate limits are not enforced in Wave 7. This is a known gap, recorded as follow-up work, not a silent behaviour change.
+Consequences: Admin endpoints in Rust accept bursts Python would throttle; the gap must be closed by a shared limiter, not per-route hacks.
+
+## ADR-091: Roles-cohort broadcasts dedup with `DISTINCT` (ADM-05) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's roles-cohort broadcast counts a user once per role, so a user with two roles is double-counted in the recipient total.
+Decision: Rust dedups with `DISTINCT` — one recipient row per user. This is a deliberate deviation from Python's double-count bug.
+Consequences: Broadcast recipient counts in Rust are correct; Python's count is higher by the number of multi-role users.
+
+## ADR-092: TEST_SCHEMA gaps fixed for roles/permissions/settings (ADM-06) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The admin routes read `roles.description`, `permissions.description` and `platform_settings.updated_at`, which TEST_SCHEMA did not define — the routes 500'd on a fresh test database.
+Decision: The three columns were added to TEST_SCHEMA (schema fix only, no behaviour change).
+Consequences: Admin tests pass on a fresh schema; production schema is unchanged (the columns already exist there).
+
+## ADR-093: `super_admin` guards on role/permission CRUD (ADM-07) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Role and permission changes are the highest-privilege admin action; Python guards them behind `super_admin`.
+Decision: The guard is ported exactly — non-super-admin callers get 403 on role/permission create, update and delete.
+Consequences: No privilege escalation through the Rust admin API.
+
+## ADR-094: Custom font uploads use the ADR-051 scan gate (ADM-08) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Admin font upload accepts arbitrary files; an unchecked upload is the same attack surface the Wave 6 library gate closes.
+Decision: Font uploads run the ADR-051 scanner (SHA-256 blocklist + EICAR + manual admin review) exactly like library uploads.
+Consequences: A blocked-hash or EICAR font is rejected with 422 `file_infected` and an audit row, never stored.
+
+## ADR-095: Dead-letter retry marks pending, never enqueues (ADM-09) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Retrying a dead-letter event needs the ARQ dispatcher, which stays Python (PLW-08).
+Decision: The retry endpoint is native for listing and for marking the event pending again; it never claims a job was enqueued (`enqueued: false`).
+Consequences: A retried event waits for the Python dispatcher exactly as in Python; no retry is ever faked.
+
+## ADR-096: Users-admin lifecycle is fully native (ADM-10) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The users dashboard/stats/trash, the 360° overview, role replacement, session revocation, suspend/activate, soft delete, restore and permanent delete are all pure DB/state operations.
+Decision: All are ported natively with Python's exact guards (including the super_admin checks on role replacement and permanent delete).
+Consequences: User administration works identically on both stacks; no user row is ever mutated by a path Python would forbid.
+
+## ADR-097: Platform settings GET/PUT and re-encrypt are native (ADM-11) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Settings are the control plane for every other module; a proxied settings write would split the source of truth.
+Decision: Settings read/write and the settings re-encrypt endpoint are native, using the same encrypted-setting helpers as Waves 2–6.
+Consequences: Settings written through Rust are visible to Python immediately (same table, same encryption).
+
+## ADR-098: Content-center adapters are a static registry of 11 (ACC-01) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python registers its eleven content adapters at import time (content ×5, fatwa ×2, library, LMS, places, social); each maps one (domain, content_type) pair onto its own table with the shared §9 workflow machine. No generic content table exists, in Python or here.
+Decision: Rust uses the same static registry — identical list, identical pairs, no dynamic registration.
+Consequences: An unknown (domain, content_type) 404s exactly as in Python; adding a domain means adding an adapter in both stacks.
+
+## ADR-099: `GET /items` merges, sorts and cursor-pages like Python (ACC-02) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The center inbox merges per-adapter lists; the merge order and cursor format are observable behaviour.
+Decision: Ported exactly — merge, sort by (-created_at, domain, content_type, id), page with the `{"t","d","ct","id"}` cursor, same as `list_items`.
+Consequences: Paging through the inbox is identical on both stacks, including the cursor's opaque shape.
+
+## ADR-100: Adapter transitions reuse the domain transition + center audit (ACC-03) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: A center transition must run the domain's own transition (CMS, fatwa submissions, library, places) — with its own domain event and audit — and the center must add its own audit on top.
+Decision: Ported exactly: domain transition first (its event + audit), then the center's `content.transition` / `content.bulk.transition` audit.
+Consequences: The audit trail for a center transition is identical to Python's, row for row.
+
+## ADR-101: Fatwa draft transition emits NO domain event (ACC-04, resolved at merge) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The Wave 7 content-center path emits no domain event for a draft transition, but Wave 3 `routes_fatwa.rs` emitted `fatwa.submission_updated` for it. One of the two had to be wrong.
+Decision: The center is right. Python's `_TRANSITION_EVENTS` (in `submissions_service.py`) has entries only for `in_review`, `approved`, `published`, `rejected` and `archived` — no `draft` entry — so `service.transition` emits nothing for a draft target, and both Python paths (submissions router and content-center adapter) call that same function. At the Wave 7 merge, `routes_fatwa.rs` was fixed to match: the event is now emitted only for the five mapped targets, and a draft (or any other unmapped) target emits no event.
+Consequences: Both Rust paths now match Python exactly; the `fatwa.submission_updated` event type no longer exists anywhere in the Rust binary.
+
+## ADR-102: Telegram distribution hooks are skipped in the center (ACC-05) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's center transitions notify Telegram (ADR-025); the Rust binary has no bot runtime.
+Decision: Transitions never notify Telegram from Rust. The transition itself is unaffected.
+Consequences: A transition made through Rust does not fan out to Telegram until the Python worker sees the domain event.
+
+## ADR-103: AI reindex trigger marks queued with `enqueued: false` (ACC-06) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Reindexing is an ARQ job (ADR-022 precedent); there is no indexer in the Rust binary.
+Decision: The trigger only marks the ingestion run `queued` and answers `enqueued: false` honestly.
+Consequences: No reindex is ever faked; the Python worker picks the run up exactly as in Python.
+
+## ADR-104: `GET /distribution` never 404s on a missing item (ACC-07) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's `get_distribution` 404s only on an unknown adapter, never on a missing item.
+Decision: Ported exactly — a missing item returns its distribution state (empty), an unknown adapter 404s.
+Consequences: Clients cannot distinguish "no distribution" from "missing item" through this endpoint, exactly as in Python.
+
+## ADR-105: Bulk vs single transition audit actions differ (ACC-08) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python logs `content.bulk.transition` for bulk transitions and `content.transition` for single ones; the action name is how operators tell them apart.
+Decision: Ported exactly — the audit action follows the call shape, not the domain.
+Consequences: Audit queries by action name return the same rows on both stacks.
+
+## ADR-106: Placement reorder and distribution policy are native (ACC-09) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Reordering placements and setting a distribution policy are pure DB writes with validation; no worker is involved.
+Decision: Both are ported natively with Python's exact validation (empty `ordered_ids` → 422, >200 → 422, unknown placement id → 404).
+Consequences: Homepage placement order set through Rust is live immediately, same as through Python.
+
+## ADR-107: No generic content table (ACC-10) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The center is one inbox over many tables; a generic table would be a new source of truth that Python does not have.
+Decision: No generic content table exists in Rust either. Every adapter reads its own domain table.
+Consequences: The center can never show a row that no domain owns; schema stays one-to-one with Python.
+
+## ADR-108: Social mark-read persists — deliberate deviation (SOC-01) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's social `mark_notification_read` only flushes and never commits, so the read is silently lost; the sibling users endpoint (`/users/me/notifications/{id}/read`, native since Wave 2) commits, and the social `unread-count` endpoint only makes sense if reads stick.
+Decision: `POST /social/notifications/{id}/read` persists the read with a real `UPDATE`. (The `routes_social.rs` module doc cites this as SOC-02; the worker's draft list calls it SOC-01 — same decision, numbering only.)
+Consequences: Unread counts in Rust are correct; in Python they never decrease through this endpoint.
+
+## ADR-109: Banned-word filter ported verbatim (SOC-02) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The filter decides what users may post; any difference in normalisation would admit or reject different text.
+Decision: Ported verbatim — runs before insert on posts and comments (422 `content_policy_violation`, never echoing the matched word), with Python's `_normalize_for_match` (diacritics stripped, Arabic Yeh/Kaf folded to Farsi, whitespace collapsed).
+Consequences: The same text is accepted or rejected on both stacks.
+
+## ADR-110: Social cursor pagination reuses the shared helpers (SOC-03) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's `_encode_cursor` / `_decode_cursor` produce base64url `JSON([iso, id])`; a different cursor format would break clients paging across the two stacks.
+Decision: Social cursors reuse `validate::{encode_cursor, decode_cursor}` — the same format as Python.
+Consequences: A cursor minted by Python pages correctly in Rust and vice versa.
+
+## ADR-111: Social permission gates match the Python router (SOC-04) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Group creation, the report queue, report actions and banned-word management are all permission-gated in Python.
+Decision: Ported exactly — `create_group` requires `social.moderate`, the report queue and report actions require `social.moderate`, banned words require `moderation.words`.
+Consequences: No social moderation action is reachable in Rust that Python would forbid.
+
+## ADR-112: Social feed, follows, likes, reports are native (SOC-05) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Groups, feed/posts, comments, likes, follows, reports + moderation queue and the notifications surface are all pure DB/state operations.
+Decision: All are ported natively with Python's exact shapes and guards.
+Consequences: The social surface works identically on both stacks; no social row is ever written by a path Python would forbid.
+
+## ADR-113: `sync_changelog.seq` race is NOT closed (SYN-01) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `sync_changelog.seq` is allocated as `MAX(seq)+1` by the shared `sync::record_entity_change` helper (ADR-035); two concurrent writers can allocate the same seq.
+Decision: The race is not closed in Wave 7. The fix (a sequence or an atomic allocation) is specified as follow-up work; the helper keeps the `MAX+1` allocation exactly as Python does.
+Consequences: Under concurrent sync writers the Rust binary has the same race Python has — no worse, no better — until the follow-up lands.
+
+## ADR-114: Telethon connect answers an honest 503 (SYN-02) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The Telethon MTProto client (connect code request/confirm) does not exist in the Rust binary.
+Decision: Code request/confirm validate everything locally, then answer an honest 503 `telegram_unavailable`.
+Consequences: Telegram account linking through Rust fails loudly instead of hanging or faking a code.
+
+## ADR-115: Bot sends degrade honestly to `failed`; distribution gate fails open (SYN-03) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The python-telegram-bot runtime (sending, deleting, answering callback queries) does not exist in Rust; the Wave 7 admin control-centre distribution gate (`_telegram_allowed`) is not ported either.
+Decision: Sends fail exactly the way Python fails them with no token (`failed` / `bot unavailable or send failed`), never with a fabricated message id. The distribution gate fails open, exactly like Python on a gate error.
+Consequences: No Telegram message is ever claimed sent when it was not; a gate error does not block distribution in either stack.
+
+## ADR-116: No ARQ enqueue from the Telegram routes (SYN-04) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `/distribute/publish`, `/distribute/retry` and `/import` need the ARQ worker, which stays Python (PLW-08).
+Decision: Rows and audits are written exactly like Python, but nothing is ever enqueued (`enqueued: false`, `error: "worker unavailable — retry later"`) — the honest Redis-down path Python itself takes.
+Consequences: A publish requested through Rust waits for the Python worker; no job is ever faked.
+
+## ADR-117: Telegram webhook secret verified before anything else (SYN-05) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The webhook is a public URL; an unverified update must not reach any handler.
+Decision: The secret is verified exactly like Python (`X-Telegram-Bot-Api-Secret-Token` against the `telegram.webhook_secret` setting, constant-time compare) before anything else happens. Non-`tg:` updates are ignored with `{"ok": true, "ignored": true}`; `tg:` callbacks run the full one-shot / expiry / HMAC checks and the fatwa-submission transition through the authorised path.
+Consequences: Forged updates are rejected at the door in Rust exactly as in Python.
+
+## ADR-118: Places `type` length is 422, not Python's 500 (PLW-01) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python declares `type` as `String(32)`; an over-long value passes Pydantic and fails at the DB, surfacing as a 500.
+Decision: The Rust port validates `len ≤ 32` up front and returns 422 `validation_error`. The cap value (32) is copied verbatim from the Python model.
+Consequences: A client error is no longer a 500. The observable difference is deliberate and strictly better.
+
+## ADR-119: Admin places list applies the `status` filter after the limit (PLW-02) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's admin list fetches one page (`limit`, default 100) and filters by `status` in memory, so `total` is the filtered count of that page, not of the whole table.
+Decision: Rust mirrors this exactly, including the consequence that a filtered page can be short or empty while more matching rows exist beyond the limit.
+Consequences: Deliberate compatibility, not a bug; do not "fix" without a Python-side change.
+
+## ADR-120: Places `LocalizedText` is lenient by default (PLW-03) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Missing `fa`/`ar`/`en` keys default to `""` (Pydantic defaults), present non-string/null values are 422, unknown keys are dropped.
+Decision: The Rust port mirrors the Python places schemas exactly. This is stricter than Wave 3's `validate::req_localized` in one respect (non-string present values are rejected).
+Consequences: Place names/descriptions validate identically on both stacks.
+
+## ADR-121: Widget CORS wildcard is NOT ported; it belongs to the deploy layer (PLW-04) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's `WidgetCorsMiddleware` sets `Access-Control-Allow-Origin: *` (no credentials) on `/api/v1/widgets/*` and answers OPTIONS with 204. This is middleware behaviour, not a route, and the Rust binary has no CORS middleware of its own.
+Decision: The wildcard must be provided by the reverse proxy / deploy layer in front of the Rust binary. The embed-token gate itself is fully ported (gate = `X-API-Key` or `?embed_token=`, never `?api_key=`).
+Consequences: Until the deploy layer provides it, cross-origin widget embeds will be blocked by browsers even though the endpoints answer.
+
+## ADR-122: ayah-of-day cache is in-process only; no Redis tier (PLW-05) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python caches the ayah bundle in Redis (shared across workers, survives restarts).
+Decision: Rust uses a process-local `Mutex<HashMap>` cache with the same TTL rules (success: seconds to UTC midnight clamped to [300, 21600]; negative: 60 s).
+Consequences: In a multi-replica deploy each replica warms its own cache and a restart clears it; the endpoint stays correct, just colder. A shared cache tier is a deploy concern, not a route concern.
+
+## ADR-123: ayah-of-day provider failure is an honest 502 (PLW-06) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The ayah text always comes from the Quran provider registry, never hardcoded.
+Decision: Any failure of the provider registry while building the ayah bundle returns 502 `quran_provider_error`, mirroring Python (which catches generic `Exception` from the bundle function).
+Consequences: No fallback edition and no hardcoded text are ever served.
+
+## ADR-124: zakat-mini persists a calculation row; no active rule is an honest 503 (PLW-07) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `GET /zakat-mini` runs the real Wave 6 engine and persists a `zakat_calculations` row (user NULL) exactly like Python's `calculate_zakat`.
+Decision: If no active zakat rule exists (with `asset_categories`), it returns 503 `zakat_rule_not_configured` — not the calculator's 422 — because the endpoint is unavailable by configuration, not by bad input. Test fixtures use a synthetic rule (rate 0.1); no fiqh content was invented (ADR-009).
+Consequences: The widget is honest about misconfiguration; the persisted row matches Python's.
+
+## ADR-125: ARQ queues and the dispatcher stay Python; Rust only writes outbox rows (PLW-08) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The six ARQ queues (critical, ai, media, telegram, notifications, analytics; Redis-backed, `app/worker.py` + `app/core/queues.py`) and the dispatcher (`app/core/dispatcher.py`: outbox poll, atomic claim ≤200, claim TTL 120 s, exponential backoff capped 300 s, dead-letter after 5 retries, Redis pub/sub bus) are a separate process concern with Redis semantics.
+Decision: They are not ported. Rust writes `domain_events` outbox rows exactly as before and never claims or publishes them. Precedent: jobs stay Python sidecars; Rust only marks rows pending and answers `enqueued:false` honestly (ADR-022, ADR-045, ADR-053, ADR-061).
+Consequences: Porting the loop into the Axum binary would change failure modes (claim TTL, redelivery) without a Python-side equivalent to test against.
+
+## ADR-126: Realtime WebSocket `/ws/events` stays proxied (PLW-09) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The endpoint (`app/core/realtime.py`) authenticates at handshake (preferred one-time `?ticket=` from `POST /api/v1/auth/ws-ticket`, 60 s, atomic redeem, session-bound; fallback `Authorization: Bearer <JWT>` header only — `?token=` is rejected), rejects foreign Origins, enforces channel subscriptions (exact / `prefix.*` / `*`), requires `realtime.admin` for `admin.*`, delivers `user`-aggregate events only to the owner or `users.manage` holders, heartbeats with ping/pong (timeout → close 4400), and supports resume replay from the DB via a two-part cursor.
+Decision: It is not registered natively in Axum. Honest note: the Rust binary's HTTP proxy (reqwest) cannot relay a WebSocket upgrade, so "stays proxied" currently means it works via the Python origin directly; a WS-aware proxy (or a native Axum WS implementation) is Wave 8 work, not Wave 7.
+Consequences: Live realtime clients must reach the Python origin directly until Wave 8.
+
+## ADR-127: `/metrics` is not ported; it stays proxied (PLW-10) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python exposes in-memory Prometheus exposition (`text/plain; version=0.0.4`): `http_requests_total{method,path,status}` (paths normalised, UUID/numeric segments → `{id}`), `http_request_duration_ms_avg`, `process_uptime_seconds`, `outbox_pending_events`, `outbox_oldest_pending_age_seconds`, `outbox_dead_letter_events`.
+Decision: Not ported. It would require a metrics registry the Rust binary does not have, and its counters (notably the outbox gauges) are only meaningful alongside the Python dispatcher.
+Consequences: Metrics stay on the Python origin.
+
+## ADR-128: `/api/v1/health` stays proxied (PLW-11) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's `/api/v1/health` returns `{status:"ok", env, api:"v1", media_tools: <media toolchain status>}`. Rust has only `/health` + `/ready` natively (Wave 1).
+Decision: The endpoint stays on the Python origin. The `media_tools` field reports the Python media toolchain, which the Rust binary does not own.
+Consequences: `/api/v1/health` answers from Python until the media toolchain has a Rust-side equivalent.
+
+## ADR-129: `projects/due_cron` is portable in principle but out of scope; it stays proxied (PLW-12) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: A due-date notification cron (DB due-check + notification rows) could be written as pure Rust with no ARQ dependency.
+Decision: It is explicitly not built in Wave 7 because the projects module itself is not in Wave 7 scope and stays proxied; building the cron alone would create a second writer to project notification state with no native reader. Revisit when projects is ported.
+Consequences: Project due notifications keep coming from Python only.
+
+## ADR-130: `key_from_row` reads INTEGER api-key columns as i32 (PLW-13) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `ApiKeyRow.rate_limit_per_min / quota_monthly / used_this_month` are `i64`, but the `api_keys` columns are `INTEGER` (int4). sqlx cannot decode Postgres int4 as i64, so `validate_key` (and every admin api-keys read path using `key_from_row`) returned 500 on Postgres while passing on sqlite. Root cause was never caught because Wave 2's PG smoke never exercised `validate_key` against Postgres; the widgets gate is the first caller that does.
+Decision: Fixed in Wave 7 by reading the three columns as `i32` and widening to `i64` inside `key_from_row` (ADR-028: INTEGER columns read as i32).
+Consequences: The widgets gate and the admin api-keys reads work on Postgres; no behaviour change on sqlite.
+
+## ADR-131: No `;` inside `--` comments in TEST_SCHEMA (PLW-14) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `init_test_schema` applies the schema by splitting on `';'`. A semicolon inside a `--` comment therefore splits a statement in two and breaks schema setup for every test binary in the crate (this happened with the finance `BigInteger; …` comment).
+Decision: TEST_SCHEMA comments must not contain `;`; prefer `–` or a line break. Longer term, the splitter should be comment-aware, but that is a harness change, not this wave's.
+Consequences: The finance comment was fixed to `BigInteger - …`; any future `;` in a TEST_SCHEMA comment breaks all tests the same way.
+
+## ADR-132: Calculator engines live at the crate root; Wave 7 clippy merge fixes (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: At the Wave 7 merge, `cargo clippy --all-targets -- -D warnings` failed with 51 errors although every worker had reported clean: 37 came from `calc_decimal.rs` / `calc_engines.rs` being loaded as a module twice — once inside `routes_calculators.rs` and once via `#[path]` inside `routes_widgets.rs` (clippy `duplicate_mod`; the second copy's items all read as dead code) — and 14 were style lints in the Wave 7 route and test files (`type_complexity`, `too_many_arguments`, `needless_late_init`, `while_let_loop`, `sort_by_key`, `redundant_guards`, `collapsible_match`, `manual_is_multiple_of`, `len_zero`, `doc_lazy_continuation`, needless borrows/closures).
+Decision: `calc_decimal`, `calc_engines` and `calc_mosaref` are declared once at the crate root (`lib.rs`); `routes_calculators.rs` and `routes_widgets.rs` use them via `crate::calc_*` and load no copy of their own. The 14 style lints were fixed in place with behaviour-preserving rewrites (type aliases for complex types, a `ScanAudit` struct for the 8-argument receipt scanner, a `PlacementArgs` struct for the test helper, match guards for the collapsible `if`s). The `TEST_SCHEMA` dedup (one copy each of `social_posts` and `religious_places`) and the finance-comment `;` fix (ADR-131) were verified in the merged tree.
+Consequences: `cargo clippy --all-targets -- -D warnings` is green again on the merged tree. Any future module that needs the calculator engines must `use crate::calc_*` — never `#[path]`-include the files a second time.

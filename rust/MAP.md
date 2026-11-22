@@ -226,6 +226,147 @@ The honest path for a pure Rust server is:
     `WAVE2_PG_URL` is set) plus 35 lib unit tests in
     `calc_decimal.rs` / `calc_engines.rs` / `calc_mosaref.rs`. Cases:
     `rust/app-cases/wave6/` (20 cases: lib-01–08, 01–06 lms, calc-01–06).
+- Wave 7 (done, verified green locally — `cargo fmt`, `clippy -D warnings`,
+  `cargo test` incl. Postgres smokes): finance + admin + admin content
+  center + social + sync + telegram + places + widgets are answered
+  natively in Rust; everything else still proxies. Kill switch per
+  module: `RUST_ANYTHING_UNIT_<FINANCE|ADMIN|ADMIN_CONTENT|SOCIAL|SYNC|
+  TELEGRAM|PLACES|WIDGETS>=original` falls back to the Python origin.
+  Details: ADR-076 – ADR-132. Total native routes: 440 route+method
+  combos (Wave 7 adds 136: finance 23, admin 37, admin content 17,
+  social 24, sync 7, telegram 15, places 9, widgets 4). Note: the
+  pre-Wave-7 baseline recounts to 304, not 302 — the Wave 6 report's
+  total was short by one in its own arithmetic, and hifz recounts to
+  53 combos, not 52.
+  - finance: `POST /api/v1/finance/donate`, `/donate/manual`,
+    `GET /finance/callback`, `POST /finance/callback/idpay`,
+    `POST /finance/webhook/{gateway}`,
+    `GET /finance/donation-methods`, `GET /finance/campaigns`,
+    `GET /finance/campaigns/{campaign_id}`,
+    `POST /api/v1/finance/recurring`,
+    `GET|POST /api/v1/admin/finance/campaigns`,
+    `PUT|PATCH|DELETE /admin/finance/campaigns/{campaign_id}`,
+    `GET /api/v1/admin/finance/donations`, `/ledger`, `/reconcile`,
+    `/gateways`, `/manual-donations`,
+    `/manual-donations/{proof_id}/proof-image`, `/fx-rate`,
+    `POST .../manual-donations/{proof_id}/approve`, `.../reject`
+    (ZarinPal + IDPay live over HTTPS, ADR-078; receipt PDF stays
+    proxied, ADR-076; receipt images use the ADR-051 scan gate, ADR-077)
+  - admin: `GET|PUT /api/v1/admin/settings`,
+    `POST /api/v1/admin/settings/reencrypt`,
+    `GET /api/v1/admin/events/dead-letter`,
+    `POST .../dead-letter/{event_id}/retry`,
+    `POST|DELETE /api/v1/admin/fonts` (`DELETE .../fonts/{locale}`),
+    `GET /api/v1/admin/sync/devices`,
+    `GET|POST /api/v1/admin/builds/releases`,
+    `GET /api/v1/admin/builds/prereqs`,
+    `POST /api/v1/admin/builds/rebuild`,
+    `GET /api/v1/admin/builds/requests` (real GitHub
+    `workflow_dispatch`, never a shell, ADR-087),
+    `GET /api/v1/admin/connections/status`,
+    `POST /api/v1/admin/connections/test/{service}`,
+    `POST /api/v1/admin/notifications/broadcast`,
+    `GET .../broadcasts`, `GET .../broadcasts/{broadcast_id}`,
+    `GET .../delivery-stats`, `GET .../channels`,
+    `POST .../preview`,
+    `GET|POST /api/v1/admin/roles`,
+    `GET /api/v1/admin/roles/permissions`,
+    `PUT|DELETE /api/v1/admin/roles/{role_id}`,
+    `GET /api/v1/admin/users/dashboard`, `/stats`, `/trash`,
+    `GET /api/v1/admin/users/{user_id}/overview`,
+    `PATCH .../roles`, `POST .../sessions/revoke`,
+    `POST .../suspend`, `POST .../activate`,
+    `DELETE /api/v1/admin/users/{user_id}`,
+    `POST .../restore`, `DELETE .../permanent`
+    (admin rate limits NOT enforced, ADR-090; roles-cohort broadcasts
+    dedup with DISTINCT, ADR-091)
+  - admin content center: `GET /api/v1/admin/content/adapters`,
+    `/items`, `/items/{domain}/{content_type}/{item_id}`,
+    `POST /api/v1/admin/content/bulk`,
+    `GET|PUT /api/v1/admin/content/placements`,
+    `PATCH|DELETE .../placements/{placement_id}`,
+    `POST .../placements/reorder`,
+    `GET|PUT /api/v1/admin/content/distribution`,
+    `PATCH .../items/{domain}/{content_type}/{item_id}/distribution`,
+    `GET /api/v1/admin/content/calendar`,
+    `POST .../items/{domain}/{content_type}/{item_id}/transition`,
+    `GET /api/v1/admin/content/audit`, `/ai-sources`,
+    `POST .../ai-sources/{domain}/{content_type}/{item_id}/reindex`
+    (11 adapters, static registry, ADR-098; reindex answers
+    `enqueued: false`, ADR-103; fatwa draft transition emits no
+    event, ADR-101)
+  - social: `GET|POST /api/v1/social/groups`,
+    `GET /api/v1/social/groups/{group_id}`,
+    `POST .../groups/{group_id}/join`, `.../leave`,
+    `GET /api/v1/social/feed`,
+    `GET /api/v1/social/groups/{group_id}/posts`,
+    `POST /api/v1/social/posts`, `GET /api/v1/social/posts/{post_id}`,
+    `POST|DELETE .../posts/{post_id}/like`,
+    `GET|POST .../posts/{post_id}/comments`,
+    `POST|DELETE /api/v1/social/follows` (`DELETE .../{followed_id}`),
+    `POST /api/v1/social/report`,
+    `GET /api/v1/social/notifications`,
+    `POST .../notifications/{notif_id}/read`,
+    `GET .../notifications/unread-count`,
+    `GET /api/v1/admin/social/reports`,
+    `POST .../reports/{report_id}/action`,
+    `GET|POST /api/v1/moderation/banned-words`,
+    `DELETE .../banned-words/{word_id}`
+    (mark-read persists — deliberate deviation, ADR-108; banned-word
+    filter verbatim, ADR-109)
+  - sync: `POST /api/v1/sync/push`, `GET /api/v1/sync/pull`,
+    `/sync/cursor`, `/sync/devices`, `/sync/conflicts`,
+    `POST /api/v1/sync/conflicts/{conflict_id}/resolve`,
+    `GET /api/v1/sync/offline-pack`
+    (idempotent push, max-wins progress, optimistic note conflicts,
+    tombstones; `seq` MAX+1 race NOT closed, ADR-113)
+  - telegram: `POST /api/v1/telegram/webhook`,
+    `GET /telegram/status/public`,
+    `POST /telegram/connect/request-code`,
+    `POST /telegram/connect/confirm-code`,
+    `GET /telegram/connect/status`,
+    `POST /telegram/connect/disconnect`, `POST /telegram/import`,
+    `GET|PUT /api/v1/telegram/distribute/policies`
+    (`PUT .../policies/{content_type}`),
+    `POST /telegram/distribute/publish`,
+    `GET /telegram/distribute/log`,
+    `POST .../retry/{published_id}`, `.../revoke/{published_id}`,
+    `.../approve/{published_id}`, `.../reject/{published_id}`
+    (Telethon connect honestly 503, ADR-114; sends degrade to `failed`,
+    ADR-115; no ARQ enqueue, ADR-116)
+  - places: `GET /api/v1/places`, `POST /api/v1/places/submissions`,
+    `GET /api/v1/places/{place_id}`,
+    `POST|GET /api/v1/admin/places`,
+    `GET|PATCH|DELETE /admin/places/{place_id}`,
+    `POST .../transition` (draft-only delete; `type` from the live
+    `places.types` setting; `status` filter after the limit, ADR-119)
+  - widgets: `GET /api/v1/widgets/prayer-times`, `/ayah-of-day`,
+    `/latest-fatwa`, `/zakat-mini` (gate: `X-API-Key` or `?embed_token=`;
+    CORS wildcard NOT ported — deploy layer, ADR-121; ayah cache
+    in-process only, ADR-122)
+  - workers: ARQ queues, dispatcher, `/ws/events`, `/metrics` and
+    `/api/v1/health` all stay on the Python origin (ADR-125 – ADR-128);
+    `projects/due_cron` noted as portable-in-principle, out of scope
+    (ADR-129). The `projects` module (17 routes) is NOT in Wave 7 and
+    stays proxied.
+  - Merge fixes (ADR-132): the calculator engines
+    (`calc_decimal`, `calc_engines`, `calc_mosaref`) are declared once
+    at the crate root — `routes_widgets.rs` had `#[path]`-included a
+    second copy, which broke `clippy -D warnings` with 37 duplicate-mod
+    / dead-code errors; 14 further style lints were fixed in place.
+    `TEST_SCHEMA` holds exactly one copy each of `social_posts` and
+    `religious_places`; the Wave 3 fatwa catch-all event was fixed so a
+    draft transition emits no domain event (ADR-101).
+  - Tests: `rust/app/tests/wave7_finance.rs` (26: 25 sqlite +
+    `wave7_finance_pg_smoke`), `wave7_admin.rs` (13: 12 sqlite +
+    smoke), `wave7_admin_content.rs` (24: 23 sqlite + smoke),
+    `wave7_social.rs` (20: 19 sqlite + smoke),
+    `wave7_sync_telegram.rs` (17: 16 sqlite + smoke),
+    `wave7_places_widgets.rs` (16: 15 sqlite + smoke) — 116 Wave 7
+    tests, each binary replaying its critical path on local Postgres
+    when `WAVE2_PG_URL` is set. Cases: `rust/app-cases/wave7/`
+    (50 cases + README: fin-01–08, adm-01–10, acc-01–08, soc-01–08,
+    syn-01–08, plw-01–08).
   - Tests: `rust/app/tests/wave4.rs` (24 tests, sqlite in-memory;
     `wave4_pg_smoke` replays the critical path on local Postgres when
     `WAVE2_PG_URL` is set). Cases: `rust/app-cases/wave4/` (15 cases).
