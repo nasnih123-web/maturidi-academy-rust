@@ -7,10 +7,12 @@
 //! binary embeds no speech recognizer and never fakes scores —
 //! `POST /attempts/{id}/grade`, `POST /attempts/{id}/grade-word`,
 //! `POST /voice-search`, `POST /tests/{id}/questions/{qid}/answer`
-//! and the live WebSocket `WS /attempts/{id}/stream` are not
-//! registered here, so they fall through to the proxy fallback (the
-//! WS one is registered explicitly as an honest 503 — the HTTP
-//! proxy cannot relay WebSocket upgrades; see ADR-032).
+//! are not registered here: since the Wave 8 lift they are explicit
+//! sidecar-contract routes in `routes_lift` (ADR-134) that forward
+//! to `SIDECAR_URL` when one is configured and answer an honest 503
+//! `hifz_asr_unavailable` when it is not. The live WebSocket
+//! `WS /attempts/{id}/stream` is registered explicitly as an honest
+//! 503 — there is no ASR in the Rust binary; see ADR-031.
 //! Everything else in this module is native.
 
 use std::collections::{HashMap, HashSet};
@@ -3858,7 +3860,7 @@ pub async fn data_purge(
 /// `WS /api/v1/quran/hifz/attempts/{attempt_id}/stream` — the live
 /// reading stream needs a stateful WebSocket holding a native
 /// sherpa-onnx recognizer in memory; the Rust binary has no ASR and
-/// the HTTP proxy cannot relay WebSocket upgrades (ADR-032). This
+/// the HTTP proxy cannot relay WebSocket upgrades (ADR-031). This
 /// explicit 503 keeps the failure honest instead of letting the
 /// proxy mangle the handshake. Use the Python origin directly
 /// (or `RUST_ANYTHING_UNIT_HIFZ=original` + direct origin access)

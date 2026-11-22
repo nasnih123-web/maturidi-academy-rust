@@ -3,7 +3,10 @@
 //! saved fatwas. Ported from `apps/api/app/modules/fatwa/`.
 //!
 //! `POST /api/v1/fatwa/ask` (the AI assistant / mufti) is deliberately
-//! NOT registered here — it stays proxied to the Python server.
+//! NOT registered here — since the Wave 8 lift it is a sidecar-contract
+//! route in `routes_lift` (ADR-134), forwarding to `SIDECAR_URL` when
+//! one is configured and answering an honest 503 `fatwa_ask_unavailable`
+//! when it is not.
 //!
 //! Check order (FastAPI signature order): path UUID → body (422) →
 //! auth (401) → permission (403) → service checks (404/409/422).

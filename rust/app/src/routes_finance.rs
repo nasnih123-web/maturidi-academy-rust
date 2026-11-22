@@ -12,10 +12,12 @@
 //!
 //! Deliberately NOT native (FIN-01): `GET /api/v1/finance/receipts/{id}`
 //! — the trilingual receipt PDF needs reportlab + arabic-reshaper +
-//! python-bidi + system fonts (ADR-008 / ADR-061 class). It falls
-//! through to the proxy so the Python origin keeps rendering it for
-//! real instead of answering an honest 503 for a working feature
-//! (ADR-046 precedent).
+//! python-bidi + system fonts (ADR-008 / ADR-061 class). Since the
+//! Wave 8 lift it is a sidecar-contract route in `routes_lift`
+//! (ADR-134): it forwards to `SIDECAR_URL` when one is configured
+//! and answers an honest 503 `receipt_pdf_unavailable` when it is
+//! not, instead of answering a 503 for a working feature (ADR-046
+//! precedent).
 //!
 //! Money rules ported exactly: idempotency-key replay of intents,
 //! `_finalize_success` re-entrancy (one donation + one ledger row per

@@ -3137,9 +3137,9 @@ pub async fn get_connections_status(
 
 async fn test_ai(state: &AppState, db: &Db) -> ApiResult<Value> {
     // The LLM provider lives behind `POST /api/v1/fatwa/ask`, which
-    // stays proxied (ADR-026); there is no LLM client in the Rust
-    // binary to ping with. Report honestly instead of faking a probe
-    // (see ADM-05).
+    // is a sidecar-contract route since the Wave 8 lift (ADR-134);
+    // there is no LLM client in the Rust binary to ping with. Report
+    // honestly instead of faking a probe (see ADM-05).
     let ai_key = get_setting(db, &state.config, "ai.claude_api_key").await?;
     let cfg_count: i64 = db
         .fetch_one(

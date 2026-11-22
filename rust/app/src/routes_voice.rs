@@ -7,10 +7,10 @@
 //! `POST /voice/transcribe` and `POST /voice/ask` are deliberately
 //! NOT registered here: both routes exist only to run STT
 //! (faster-whisper), which is a sidecar per ADR-008 and never lives
-//! in the Rust binary. Registering them natively would answer an
-//! honest 503 where the Python origin transcribes for real — a
-//! regression. They fall through to the proxy, exactly like the
-//! Wave 4 hifz ASR endpoints (ADR-031 precedent). See ADR-046.
+//! in the Rust binary. Since the Wave 8 lift they are registered in
+//! `routes_lift` as explicit sidecar-contract routes (ADR-134): they
+//! forward to `SIDECAR_URL` when one is configured and answer an
+//! honest 503 `voice_stt_unavailable` when it is not. See ADR-046.
 //! The deterministic pieces (intents, TTS client) are ported as
 //! `voice_intents` / `voice_tts` and unit-tested, ready for the day
 //! an STT sidecar is wired (ADR-047).

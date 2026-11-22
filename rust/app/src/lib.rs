@@ -2,28 +2,33 @@
 //!
 //! Natively implements `GET /health` and `GET /ready` (Wave 1) plus the
 //! Wave 2 modules — meta, activity, api_keys, users, auth — exactly like
-//! the Python FastAPI server (`apps/api/app/main.py`). Every other
-//! method/path is proxied to the original server (`ORIGIN_URL`).
+//! the Python FastAPI server (`apps/api/app/main.py`), and every later
+//! wave's modules the same way. Since the Wave 8 lift (ADR-133) there
+//! is no proxy fallback: anything no route matches is a native 404 in
+//! Python's error envelope, and the 8 routes that need the Python
+//! toolchain forward explicitly to `SIDECAR_URL` (ADR-134).
 //!
-//! Kill switch (per module): `RUST_ANYTHING_UNIT_<NAME>=original`
+//! Kill switches are retired at the lift: `RUST_ANYTHING_UNIT_<NAME>=original`
 //! (`META`, `ACTIVITY`, `API_KEYS`, `USERS`, `AUTH`, `HOME`, `CONTENT`,
-//! `ARTICLES`, `FATWA`, `VIDEOS`, `VOICE`) un-registers that module's native routes, so
-//! they proxy to the Python server again.
+//! `ARTICLES`, `FATWA`, `VIDEOS`, `VOICE`, ...) no longer has an origin
+//! to fall back to, so the env var is only logged once per module
+//! ("kill switch retired at lift; ignoring") and the routes stay
+//! native (ADR-133).
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, OnceLock,
     },
     time::Duration,
 };
 
 use axum::{
-    body::Body,
     extract::{DefaultBodyLimit, State},
-    http::{Request, Response, StatusCode},
-    response::{IntoResponse, Json},
+    http::StatusCode,
+    middleware,
+    response::Json,
     routing::{delete, get, patch, post, put},
     Router,
 };
@@ -68,9 +73,11 @@ mod routes_finance;
 mod routes_hifz;
 mod routes_home;
 mod routes_library;
+mod routes_lift;
 mod routes_lms;
 mod routes_meta;
 mod routes_places;
+pub mod routes_projects;
 mod routes_quran;
 mod routes_social;
 mod routes_sync;
@@ -109,20 +116,30 @@ pub use storage::presigned_url;
 /// Mirrors `app/core/config.py` where it applies: `APP_ENV` (default
 /// `dev`), `DATABASE_URL` (no default — unset means the DB is
 /// unavailable), `REDIS_URL` (default `redis://localhost:6379/0`),
-/// `ORIGIN_URL` (default `http://127.0.0.1:8000`), `PORT` (8000), plus
+/// `SIDECAR_URL` (no default — unset means the sidecar is unavailable,
+/// ADR-134), `CORS_ALLOW_ORIGINS` (default empty), `PORT` (8000), plus
 /// the Wave 2 auth settings: `JWT_SECRET`, `ACCESS_TOKEN_EXPIRE_MINUTES`
 /// (15), `ENCRYPTION_KEY` / `ENCRYPTION_KEY_VERSION` / `ENCRYPTION_KEYS`,
 /// `STORAGE_SIGNING_SECRET` (+ `_PREVIOUS`), `APP_BASE_URL`,
 /// `CAPTCHA_ENABLED` (true), `TURNSTILE_SITE_KEY` /
 /// `TURNSTILE_SECRET_KEY`, `TRUSTED_PROXIES`, `STORAGE_PROVIDER`
 /// (`local`), `STORAGE_LOCAL_DIR` (`./storage`),
-/// `CLAMAV_ALLOW_INSECURE_DEV_BYPASS` (false).
+/// `CLAMAV_ALLOW_INSECURE_DEV_BYPASS` (false), and the realtime
+/// settings `WS_HEARTBEAT_INTERVAL` (25) / `WS_HEARTBEAT_TIMEOUT` (60)
+/// / `DISPATCHER_POLL_INTERVAL` (1.0).
+///
+/// `ORIGIN_URL` was removed at the Wave 8 lift (ADR-133): there is no
+/// origin to proxy to any more.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub app_env: String,
     pub database_url: Option<String>,
     pub redis_url: String,
-    pub origin_url: String,
+    pub sidecar_url: Option<String>,
+    pub cors_allow_origins: String,
+    pub ws_heartbeat_interval: u64,
+    pub ws_heartbeat_timeout: u64,
+    pub dispatcher_poll_interval: f64,
     pub port: u16,
     pub jwt_secret: String,
     pub access_token_expire_minutes: i64,
@@ -165,7 +182,11 @@ impl Default for Config {
             app_env: "dev".to_string(),
             database_url: None,
             redis_url: "redis://localhost:6379/0".to_string(),
-            origin_url: "http://127.0.0.1:8000".to_string(),
+            sidecar_url: None,
+            cors_allow_origins: String::new(),
+            ws_heartbeat_interval: 25,
+            ws_heartbeat_timeout: 60,
+            dispatcher_poll_interval: 1.0,
             port: 8000,
             jwt_secret: "CHANGE_ME".to_string(),
             access_token_expire_minutes: 15,
@@ -194,7 +215,23 @@ impl Config {
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
         let redis_url = env_str("REDIS_URL", "redis://localhost:6379/0");
-        let origin_url = env_str("ORIGIN_URL", "http://127.0.0.1:8000");
+        let sidecar_url = std::env::var("SIDECAR_URL")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let cors_allow_origins = std::env::var("CORS_ALLOW_ORIGINS").ok().unwrap_or_default();
+        let ws_heartbeat_interval = std::env::var("WS_HEARTBEAT_INTERVAL")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(25);
+        let ws_heartbeat_timeout = std::env::var("WS_HEARTBEAT_TIMEOUT")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(60);
+        let dispatcher_poll_interval = std::env::var("DISPATCHER_POLL_INTERVAL")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(1.0);
         let port = std::env::var("PORT")
             .ok()
             .and_then(|v| v.trim().parse::<u16>().ok())
@@ -210,7 +247,11 @@ impl Config {
             app_env,
             database_url,
             redis_url,
-            origin_url,
+            sidecar_url,
+            cors_allow_origins,
+            ws_heartbeat_interval,
+            ws_heartbeat_timeout,
+            dispatcher_poll_interval,
             port,
             jwt_secret: env_str("JWT_SECRET", "CHANGE_ME"),
             access_token_expire_minutes: std::env::var("ACCESS_TOKEN_EXPIRE_MINUTES")
@@ -250,6 +291,13 @@ pub struct AppState {
     pub client: reqwest::Client,
     pub db: Option<Db>,
     pub limiter: Arc<RateLimiter>,
+    /// Real request counters for `GET /metrics` (Wave 8 lift).
+    pub metrics: Arc<routes_lift::Metrics>,
+    /// Realtime hub: broadcast channel fed by the outbox poller.
+    pub ws_hub: Arc<routes_lift::WsHub>,
+    /// Minimal OpenAPI spec, generated from the built router in
+    /// `build_router` (empty until then).
+    pub openapi_json: Arc<String>,
     settings_version: Arc<AtomicU64>,
     api_key_usage: Arc<Mutex<HashMap<String, i64>>>,
 }
@@ -284,6 +332,9 @@ impl AppState {
             client,
             db,
             limiter,
+            metrics: Arc::new(routes_lift::Metrics::new()),
+            ws_hub: Arc::new(routes_lift::WsHub::new()),
+            openapi_json: Arc::new(String::new()),
             settings_version: Arc::new(AtomicU64::new(0)),
             api_key_usage: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -323,16 +374,33 @@ impl AppState {
     }
 }
 
-/// Kill switch: `RUST_ANYTHING_UNIT_<NAME>=original` disables the native
-/// module (its routes fall through to the proxy).
-fn unit_native(name: &str) -> bool {
-    std::env::var(format!("RUST_ANYTHING_UNIT_{name}"))
-        .map(|v| v.trim().to_lowercase() != "original")
-        .unwrap_or(true)
+/// Kill switch, retired at the Wave 8 lift (ADR-133):
+/// `RUST_ANYTHING_UNIT_<NAME>=original` no longer has an origin to
+/// fall back to. The env var is still read, and the first time a
+/// module is seen set to `original` one warning is logged ("kill
+/// switch retired at lift; ignoring"); the routes always stay native.
+fn unit_native(name: &'static str) -> bool {
+    static WARNED: OnceLock<std::sync::Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let retired = std::env::var(format!("RUST_ANYTHING_UNIT_{name}"))
+        .map(|v| v.trim().eq_ignore_ascii_case("original"))
+        .unwrap_or(false);
+    if retired {
+        let warned = WARNED.get_or_init(|| std::sync::Mutex::new(HashSet::new()));
+        if let Ok(mut set) = warned.lock() {
+            if set.insert(name) {
+                tracing::warn!(
+                    "kill switch RUST_ANYTHING_UNIT_{name}=original retired at lift; ignoring, routes stay native"
+                );
+            }
+        }
+    }
+    true
 }
 
-/// Build the router: native `/health`, `/ready` and Wave 2 modules,
-/// everything else proxied.
+/// Build the router: native `/health`, `/ready`, every ported module,
+/// and the Wave 8 lift routes (`/metrics`, `/api/v1/health`,
+/// `/openapi.json`, `/static/*`, `/ws/events`, the 8 sidecar routes).
+/// Anything else is a native 404 in Python's envelope.
 pub fn build_router(state: AppState) -> Router {
     let mut router = Router::new()
         .route("/health", get(health))
@@ -1723,7 +1791,112 @@ pub fn build_router(state: AppState) -> Router {
             );
     }
 
-    router.fallback(proxy).with_state(state)
+    // ---- Wave 8 projects (ADR-141) --------------------------------------
+    if unit_native("PROJECTS") {
+        router = router
+            .route(
+                "/api/v1/projects",
+                get(routes_projects::list_projects).post(routes_projects::create_project),
+            )
+            .route(
+                "/api/v1/projects/tasks/by-entity",
+                get(routes_projects::tasks_by_entity),
+            )
+            .route(
+                "/api/v1/projects/{project_id}",
+                get(routes_projects::get_project)
+                    .patch(routes_projects::update_project)
+                    .delete(routes_projects::delete_project),
+            )
+            .route(
+                "/api/v1/projects/{project_id}/tasks",
+                get(routes_projects::list_tasks).post(routes_projects::create_task),
+            )
+            .route(
+                "/api/v1/projects/tasks/{task_id}",
+                get(routes_projects::get_task)
+                    .patch(routes_projects::update_task)
+                    .delete(routes_projects::delete_task),
+            )
+            .route(
+                "/api/v1/projects/tasks/{task_id}/move",
+                post(routes_projects::move_task),
+            )
+            .route(
+                "/api/v1/staff",
+                get(routes_projects::list_staff).post(routes_projects::create_staff),
+            )
+            .route(
+                "/api/v1/staff/{staff_id}",
+                get(routes_projects::get_staff)
+                    .patch(routes_projects::update_staff)
+                    .delete(routes_projects::delete_staff),
+            )
+            .route(
+                "/api/v1/admin/projects/due-soon-cycle",
+                post(routes_projects::due_soon_cycle),
+            );
+    }
+
+    // ---- Wave 8 lift (ADR-133 – ADR-140) --------------------------------
+    // Native metrics / health / openapi / static / realtime, plus the
+    // explicit sidecar contract for the 8 routes that need the Python
+    // toolchain. No catch-all proxy remains: anything unmatched is a
+    // native 404, and a wrong method on a known path is a native 405.
+    router = router
+        .route("/metrics", get(routes_lift::metrics_handler))
+        .route("/api/v1/health", get(routes_lift::health_v1))
+        .route("/openapi.json", get(routes_lift::openapi_handler))
+        .route("/static/{*path}", get(routes_lift::static_file))
+        .route("/ws/events", get(routes_lift::ws_events))
+        .route("/api/v1/fatwa/ask", post(routes_lift::sidecar_fatwa_ask))
+        .route(
+            "/api/v1/finance/receipts/{donation_id}",
+            get(routes_lift::sidecar_receipt_pdf),
+        )
+        .route(
+            "/api/v1/quran/hifz/attempts/{attempt_id}/grade",
+            post(routes_lift::sidecar_hifz_grade),
+        )
+        .route(
+            "/api/v1/quran/hifz/attempts/{attempt_id}/grade-word",
+            post(routes_lift::sidecar_hifz_grade_word),
+        )
+        .route(
+            "/api/v1/quran/hifz/tests/{test_id}/questions/{question_id}/answer",
+            post(routes_lift::sidecar_hifz_test_answer),
+        )
+        .route(
+            "/api/v1/quran/hifz/voice-search",
+            post(routes_lift::sidecar_hifz_voice_search),
+        )
+        .route(
+            "/api/v1/voice/transcribe",
+            post(routes_lift::sidecar_voice_transcribe),
+        )
+        .route("/api/v1/voice/ask", post(routes_lift::sidecar_voice_ask));
+
+    // The OpenAPI spec is generated from the router just built (see
+    // routes_lift::openapi_spec); the realtime poller fans the outbox
+    // out to live WebSocket subscribers. The spec is cached
+    // process-wide: since the lift the registered routes no longer
+    // depend on env or config (the kill switches are retired), so
+    // every router builds the same spec.
+    static OPENAPI_CACHE: OnceLock<String> = OnceLock::new();
+    let spec = OPENAPI_CACHE
+        .get_or_init(|| routes_lift::openapi_spec(&router))
+        .clone();
+    let mut state = state;
+    state.openapi_json = Arc::new(spec);
+    routes_lift::spawn_realtime_poller(&state);
+    router
+        .fallback(routes_lift::not_found)
+        .method_not_allowed_fallback(routes_lift::method_not_allowed)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            routes_lift::metrics_middleware,
+        ))
+        .with_state(state)
 }
 
 /// Liveness, pure: the process is alive. Exactly `{"status":"ok","env":...}`,
@@ -1834,66 +2007,4 @@ async fn probe_redis(redis_url: &str) -> &'static str {
         Ok(Some(())) => "ok",
         _ => "unavailable",
     }
-}
-
-/// Proxy fallback: forward method, path, query, headers (except `host`) and
-/// body to the origin, and return its status, headers and body verbatim.
-/// The origin is unreachable → 502 `bad_gateway` (ADR-013).
-async fn proxy(State(state): State<AppState>, req: Request<Body>) -> Response<Body> {
-    let (parts, body) = req.into_parts();
-    let path_and_query = parts
-        .uri
-        .path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or("/");
-    let origin = state.config.origin_url.trim_end_matches('/');
-    let url = format!("{origin}{path_and_query}");
-
-    let bytes = match axum::body::to_bytes(body, usize::MAX).await {
-        Ok(b) => b,
-        Err(_) => return bad_gateway(&state.config.app_env),
-    };
-
-    let mut request = state.client.request(parts.method.clone(), &url);
-    for (name, value) in parts.headers.iter() {
-        if name == http::header::HOST {
-            continue;
-        }
-        request = request.header(name, value);
-    }
-
-    let upstream = match request.body(bytes).send().await {
-        Ok(r) => r,
-        Err(_) => return bad_gateway(&state.config.app_env),
-    };
-    let status = upstream.status();
-    let headers = upstream.headers().clone();
-    let upstream_bytes = match upstream.bytes().await {
-        Ok(b) => b,
-        Err(_) => return bad_gateway(&state.config.app_env),
-    };
-
-    let mut builder = Response::builder().status(status);
-    for (name, value) in headers.iter() {
-        // `content-length` is set by axum from the body; `transfer-encoding`
-        // and `connection` are hop-by-hop and must not be forwarded.
-        if name == http::header::CONTENT_LENGTH
-            || name == http::header::TRANSFER_ENCODING
-            || name == http::header::CONNECTION
-        {
-            continue;
-        }
-        builder = builder.header(name, value);
-    }
-    builder
-        .body(Body::from(upstream_bytes))
-        .unwrap_or_else(|_| bad_gateway(&state.config.app_env))
-}
-
-fn bad_gateway(env: &str) -> Response<Body> {
-    (
-        StatusCode::BAD_GATEWAY,
-        Json(json!({"status": "bad_gateway", "env": env})),
-    )
-        .into_response()
 }

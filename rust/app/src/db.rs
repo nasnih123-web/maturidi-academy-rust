@@ -1216,6 +1216,25 @@ CREATE TABLE hifz_tasmi_sessions (
     reflection TEXT, status TEXT NOT NULL DEFAULT 'active',
     created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ, completed_at TIMESTAMPTZ
 );
+-- Wave 8 projects module - mirrors app modules projects
+CREATE TABLE projects (
+    id UUID PRIMARY KEY, title JSONB NOT NULL, status VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_by UUID, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ
+);
+CREATE TABLE tasks (
+    id UUID PRIMARY KEY, project_id UUID NOT NULL, title JSONB NOT NULL,
+    description JSONB, assignee_id UUID, status VARCHAR(16) NOT NULL DEFAULT 'backlog',
+    due_date TIMESTAMPTZ, priority VARCHAR(16) NOT NULL DEFAULT 'medium',
+    related_entity_type VARCHAR(64), related_entity_id UUID,
+    due_notified_at TIMESTAMPTZ, created_by UUID,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ
+);
+CREATE INDEX ix_tasks_related_entity ON tasks (related_entity_type, related_entity_id);
+CREATE TABLE staff_members (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL UNIQUE, title JSONB NOT NULL,
+    department JSONB NOT NULL, joined_date DATE, is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ
+);
 "#;
 
 /// Apply `TEST_SCHEMA` to a pool (sqlite tests only).
