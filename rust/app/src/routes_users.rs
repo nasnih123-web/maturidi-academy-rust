@@ -725,11 +725,11 @@ pub async fn export_data(
         let updated_at: Option<DateTime<Utc>> = n.try_get("updated_at")?;
         notes_json.push(json!({
             "id": nid.to_string(),
-            "surah": n.try_get::<i64, _>("surah")?,
-            "ayah": n.try_get::<i64, _>("ayah")?,
+            "surah": n.try_get::<i32, _>("surah")?,
+            "ayah": n.try_get::<i32, _>("ayah")?,
             "note_text": n.try_get::<String, _>("note_text")?,
             "is_private": n.try_get::<bool, _>("is_private")?,
-            "version": n.try_get::<i64, _>("version")?,
+            "version": n.try_get::<i32, _>("version")?,
             "created_at": created_at.to_rfc3339(),
             "updated_at": updated_at.map(|d| d.to_rfc3339()),
         }));
@@ -743,7 +743,7 @@ pub async fn export_data(
         let created_at: DateTime<Utc> = d.try_get("created_at")?;
         donations_json.push(json!({
             "id": did.to_string(),
-            "amount": d.try_get::<f64, _>("amount")?,
+            "amount": d.try_get::<i32, _>("amount")? as f64,
             "currency": d.try_get::<String, _>("currency")?,
             "gateway": d.try_get::<Option<String>, _>("gateway")?,
             "gateway_reference": d.try_get::<Option<String>, _>("gateway_reference")?,

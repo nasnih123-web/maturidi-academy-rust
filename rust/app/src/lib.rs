@@ -6,8 +6,9 @@
 //! method/path is proxied to the original server (`ORIGIN_URL`).
 //!
 //! Kill switch (per module): `RUST_ANYTHING_UNIT_<NAME>=original`
-//! (`META`, `ACTIVITY`, `API_KEYS`, `USERS`, `AUTH`) un-registers that
-//! module's native routes, so they proxy to the Python server again.
+//! (`META`, `ACTIVITY`, `API_KEYS`, `USERS`, `AUTH`, `HOME`, `CONTENT`,
+//! `ARTICLES`, `FATWA`) un-registers that module's native routes, so
+//! they proxy to the Python server again.
 
 use std::{
     collections::HashMap,
@@ -23,7 +24,7 @@ use axum::{
     extract::State,
     http::{Request, Response, StatusCode},
     response::{IntoResponse, Json},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use serde_json::{json, Value};
@@ -38,19 +39,27 @@ mod captcha;
 mod countries;
 mod crypto;
 mod db;
+mod embeddings;
 mod errors;
+mod hijri;
 mod jwt;
+mod localized;
 mod mail;
 mod ratelimit;
 mod routes_activity;
 mod routes_api_keys;
+mod routes_articles;
 mod routes_auth;
+mod routes_content;
+mod routes_fatwa;
+mod routes_home;
 mod routes_meta;
 mod routes_users;
 mod settings;
 mod storage;
 mod totp;
 mod validate;
+mod workflow;
 
 pub use db::{init_test_schema, Arg, Db, IntoArg, TEST_SCHEMA};
 use errors::ApiError;
@@ -291,6 +300,272 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/ready", get(ready));
 
+    if unit_native("HOME") {
+        router = router
+            .route("/api/v1/home/sections", get(routes_home::home_sections))
+            .route("/api/v1/search", get(routes_home::search))
+            .route(
+                "/api/v1/admin/home/sections/{key}/data",
+                put(routes_home::put_section_data),
+            );
+    }
+    if unit_native("ARTICLES") {
+        router = router
+            .route("/api/v1/articles", get(routes_articles::public_list))
+            .route(
+                "/api/v1/articles/categories",
+                get(routes_articles::public_categories),
+            )
+            .route(
+                "/api/v1/articles/{slug}/meta",
+                get(routes_articles::public_meta),
+            )
+            .route(
+                "/api/v1/articles/{slug}",
+                get(routes_articles::public_detail),
+            )
+            .route(
+                "/api/v1/articles/{slug}/share",
+                post(routes_articles::public_share),
+            )
+            .route(
+                "/api/v1/admin/articles",
+                get(routes_articles::admin_list).post(routes_articles::admin_create),
+            )
+            .route(
+                "/api/v1/admin/articles/{article_id}",
+                put(routes_articles::admin_update),
+            )
+            .route(
+                "/api/v1/admin/articles/{article_id}/status",
+                patch(routes_articles::admin_set_status),
+            )
+            .route(
+                "/api/v1/admin/articles/categories",
+                get(routes_articles::admin_category_list)
+                    .post(routes_articles::admin_category_create),
+            )
+            .route(
+                "/api/v1/admin/articles/categories/{category_id}",
+                put(routes_articles::admin_category_update)
+                    .delete(routes_articles::admin_category_delete),
+            );
+    }
+    if unit_native("FATWA") {
+        router = router
+            // Public.
+            .route("/api/v1/fatwa/categories", get(routes_fatwa::categories))
+            .route("/api/v1/fatwa/topics", get(routes_fatwa::public_topic_list))
+            .route(
+                "/api/v1/fatwa/topics/categories",
+                get(routes_fatwa::public_topic_categories),
+            )
+            .route(
+                "/api/v1/fatwa/topics/{topic_id}",
+                get(routes_fatwa::public_topic_detail),
+            )
+            .route(
+                "/api/v1/fatwa/topics/{topic_id}/share",
+                post(routes_fatwa::public_topic_share),
+            )
+            .route(
+                "/api/v1/fatwa/compare/{topic_id}",
+                get(routes_fatwa::compare),
+            )
+            .route(
+                "/api/v1/fatwa/quiz/generate",
+                post(routes_fatwa::quiz_generate),
+            )
+            .route("/api/v1/fatwa/quiz/submit", post(routes_fatwa::quiz_submit))
+            .route("/api/v1/verify/check", post(routes_fatwa::verify_check))
+            // Admin: chunks + ingestion.
+            .route(
+                "/api/v1/admin/fatwa/chunks",
+                get(routes_fatwa::admin_chunk_list).post(routes_fatwa::admin_chunk_create),
+            )
+            .route(
+                "/api/v1/admin/fatwa/chunks/{chunk_id}/status",
+                patch(routes_fatwa::admin_chunk_set_status),
+            )
+            .route(
+                "/api/v1/admin/fatwa/ingest",
+                post(routes_fatwa::admin_ingest_trigger),
+            )
+            .route(
+                "/api/v1/admin/fatwa/ingest/{run_id}",
+                get(routes_fatwa::admin_ingest_status),
+            )
+            // Admin: topics + positions.
+            .route(
+                "/api/v1/admin/fatwa/topics",
+                get(routes_fatwa::admin_topic_list).post(routes_fatwa::admin_topic_create),
+            )
+            .route(
+                "/api/v1/admin/fatwa/topics/{topic_id}",
+                put(routes_fatwa::admin_topic_update),
+            )
+            .route(
+                "/api/v1/admin/fatwa/topics/{topic_id}/status",
+                patch(routes_fatwa::admin_topic_set_status),
+            )
+            .route(
+                "/api/v1/admin/fatwa/topics/{topic_id}/positions",
+                post(routes_fatwa::admin_position_create),
+            )
+            .route(
+                "/api/v1/admin/fatwa/positions",
+                post(routes_fatwa::admin_position_create_flat),
+            )
+            .route(
+                "/api/v1/admin/fatwa/positions/{position_id}/status",
+                patch(routes_fatwa::admin_position_set_status),
+            )
+            .route(
+                "/api/v1/admin/fatwa/quiz/questions",
+                post(routes_fatwa::admin_quiz_question_create),
+            )
+            // Admin: categories.
+            .route(
+                "/api/v1/admin/fatwa/categories",
+                get(routes_fatwa::admin_category_list).post(routes_fatwa::admin_category_create),
+            )
+            .route(
+                "/api/v1/admin/fatwa/categories/{category_id}",
+                put(routes_fatwa::admin_category_update)
+                    .delete(routes_fatwa::admin_category_delete),
+            )
+            // Admin: trusted sources + audit.
+            .route(
+                "/api/v1/admin/fatwa/trusted-sources",
+                get(routes_fatwa::admin_trusted_source_list)
+                    .post(routes_fatwa::admin_trusted_source_create),
+            )
+            .route(
+                "/api/v1/admin/fatwa/trusted-sources/{source_id}",
+                patch(routes_fatwa::admin_trusted_source_update)
+                    .delete(routes_fatwa::admin_trusted_source_delete),
+            )
+            .route(
+                "/api/v1/admin/fatwa/trusted-sources/{source_id}/check",
+                post(routes_fatwa::admin_trusted_source_check),
+            )
+            .route(
+                "/api/v1/admin/fatwa/audit",
+                get(routes_fatwa::admin_fatwa_audit),
+            )
+            // Submissions (author panel).
+            .route(
+                "/api/v1/fatwa/submissions",
+                get(routes_fatwa::submission_list).post(routes_fatwa::submission_create),
+            )
+            .route(
+                "/api/v1/fatwa/submissions/{submission_id}",
+                get(routes_fatwa::submission_get),
+            )
+            .route(
+                "/api/v1/fatwa/submissions/{submission_id}/submit",
+                post(routes_fatwa::submission_submit),
+            )
+            .route(
+                "/api/v1/fatwa/submissions/{submission_id}/approve",
+                post(routes_fatwa::submission_approve),
+            )
+            .route(
+                "/api/v1/fatwa/submissions/{submission_id}/publish",
+                post(routes_fatwa::submission_publish),
+            )
+            .route(
+                "/api/v1/fatwa/submissions/{submission_id}/reject",
+                post(routes_fatwa::submission_reject),
+            )
+            .route(
+                "/api/v1/fatwa/submissions/{submission_id}/add-to-rag",
+                post(routes_fatwa::submission_add_to_rag),
+            )
+            // Clusters.
+            .route(
+                "/api/v1/fatwa/questions",
+                post(routes_fatwa::submit_question),
+            )
+            .route("/api/v1/fatwa/clusters", get(routes_fatwa::cluster_list))
+            .route(
+                "/api/v1/fatwa/clusters/{cluster_id}",
+                get(routes_fatwa::cluster_get),
+            )
+            .route(
+                "/api/v1/fatwa/clusters/{cluster_id}/answer",
+                post(routes_fatwa::cluster_answer),
+            )
+            // Saved fatwas (bookmarks).
+            .route("/api/v1/fatwas/saved", get(routes_fatwa::saved_list))
+            .route(
+                "/api/v1/fatwas/{fatwa_id}/saved",
+                get(routes_fatwa::saved_get)
+                    .post(routes_fatwa::saved_save)
+                    .delete(routes_fatwa::saved_unsave),
+            );
+    }
+    if unit_native("CONTENT") {
+        router = router
+            // Control center (adapter registry is empty — see routes_content).
+            .route("/api/v1/content/items", get(routes_content::content_items))
+            .route(
+                "/api/v1/content/items/{content_type}/{item_id}/preview",
+                get(routes_content::content_preview),
+            )
+            .route(
+                "/api/v1/content/policies/{content_type}/{item_id}",
+                get(routes_content::content_policies),
+            )
+            // CMS admin (generic resource router).
+            .route(
+                "/api/v1/content/{resource}",
+                get(routes_content::cms_list).post(routes_content::cms_create),
+            )
+            .route(
+                "/api/v1/content/{resource}/{item_id}",
+                get(routes_content::cms_get)
+                    .patch(routes_content::cms_update)
+                    .delete(routes_content::cms_delete),
+            )
+            .route(
+                "/api/v1/content/{resource}/{item_id}/transition",
+                post(routes_content::cms_transition),
+            )
+            // CMS public reads.
+            .route(
+                "/api/v1/content/public/nav",
+                get(routes_content::public_nav),
+            )
+            .route(
+                "/api/v1/content/public/banners",
+                get(routes_content::public_banners),
+            )
+            .route(
+                "/api/v1/content/public/announcements",
+                get(routes_content::public_announcements),
+            )
+            .route(
+                "/api/v1/content/public/pages",
+                get(routes_content::public_pages),
+            )
+            .route(
+                "/api/v1/content/public/pages/slug/{slug}",
+                get(routes_content::public_page_slug),
+            )
+            .route(
+                "/api/v1/content/public/events",
+                get(routes_content::public_events),
+            )
+            .route(
+                "/api/v1/content/public/quotes",
+                get(routes_content::public_quotes),
+            )
+            .route(
+                "/api/v1/content/public/calendar/theme",
+                get(routes_content::public_calendar_theme),
+            );
+    }
     if unit_native("META") {
         router = router
             .route("/api/v1/themes/active", get(routes_meta::themes_active))

@@ -12,7 +12,7 @@
 //! Expiry comparisons are done in Rust, never in SQL, because the two
 //! engines store timestamps differently.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde_json::Value;
 use sqlx::{
     postgres::{PgArguments, PgPool, PgRow},
@@ -33,12 +33,14 @@ pub enum Arg {
     I64(i64),
     F64(f64),
     Dt(DateTime<Utc>),
+    Date(NaiveDate),
     Json(Value),
     /// SQL NULL, typed: Postgres rejects a text-typed NULL for jsonb /
     /// uuid / timestamptz columns, so `None` must carry the target type.
     NullText,
     NullUuid,
     NullTime,
+    NullDate,
     NullJson,
     NullBool,
     NullInt,
@@ -149,6 +151,14 @@ impl IntoArg for DateTime<Utc> {
         Arg::NullTime
     }
 }
+impl IntoArg for NaiveDate {
+    fn into_arg(self) -> Arg {
+        Arg::Date(self)
+    }
+    fn null_arg() -> Arg {
+        Arg::NullDate
+    }
+}
 impl IntoArg for &DateTime<Utc> {
     fn into_arg(self) -> Arg {
         Arg::Dt(*self)
@@ -240,6 +250,9 @@ fn add_arg_pg(args: &mut PgArguments, arg: &Arg) {
         Arg::Dt(v) => {
             let _ = args.add(*v);
         }
+        Arg::Date(v) => {
+            let _ = args.add(*v);
+        }
         Arg::Json(v) => {
             let _ = args.add(v.clone());
         }
@@ -251,6 +264,9 @@ fn add_arg_pg(args: &mut PgArguments, arg: &Arg) {
         }
         Arg::NullTime => {
             let _ = args.add(Option::<DateTime<Utc>>::None);
+        }
+        Arg::NullDate => {
+            let _ = args.add(Option::<NaiveDate>::None);
         }
         Arg::NullJson => {
             let _ = args.add(Option::<Value>::None);
@@ -287,6 +303,9 @@ fn add_arg_sqlite(args: &mut SqliteArguments, arg: &Arg) {
         Arg::Dt(v) => {
             let _ = args.add(*v);
         }
+        Arg::Date(v) => {
+            let _ = args.add(*v);
+        }
         Arg::Json(v) => {
             let _ = args.add(v.clone());
         }
@@ -298,6 +317,9 @@ fn add_arg_sqlite(args: &mut SqliteArguments, arg: &Arg) {
         }
         Arg::NullTime => {
             let _ = args.add(Option::<DateTime<Utc>>::None);
+        }
+        Arg::NullDate => {
+            let _ = args.add(Option::<NaiveDate>::None);
         }
         Arg::NullJson => {
             let _ = args.add(Option::<Value>::None);
@@ -618,6 +640,162 @@ CREATE TABLE donations (
     id UUID PRIMARY KEY, donor_id UUID, amount INTEGER NOT NULL, currency TEXT NOT NULL,
     gateway TEXT, gateway_reference TEXT, status TEXT NOT NULL, donor_name TEXT,
     campaign_id UUID, created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE home_sections (
+    id UUID PRIMARY KEY, key TEXT NOT NULL UNIQUE, sort_order INTEGER NOT NULL,
+    visible BOOLEAN NOT NULL DEFAULT TRUE, title JSONB NOT NULL, subtitle JSONB,
+    data JSONB, empty_title JSONB, empty_hint JSONB,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE islamic_events (
+    id UUID PRIMARY KEY, name JSONB NOT NULL, hijri_month INTEGER NOT NULL,
+    hijri_day INTEGER NOT NULL, recurring BOOLEAN NOT NULL DEFAULT TRUE,
+    theme_id UUID, auto_publish BOOLEAN NOT NULL DEFAULT FALSE,
+    needs_admin_confirmation BOOLEAN NOT NULL DEFAULT TRUE, image_url TEXT,
+    starts_at TIMESTAMPTZ, ends_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+    workflow_status TEXT NOT NULL DEFAULT 'draft', version INTEGER NOT NULL DEFAULT 1,
+    created_by UUID, distribution JSONB
+);
+CREATE TABLE scholar_quotes (
+    id UUID PRIMARY KEY, text JSONB NOT NULL, scholar JSONB NOT NULL, source TEXT,
+    quote_date DATE, avatar_url TEXT, placements JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+    workflow_status TEXT NOT NULL DEFAULT 'draft', version INTEGER NOT NULL DEFAULT 1,
+    created_by UUID, distribution JSONB
+);
+CREATE TABLE pages (
+    id UUID PRIMARY KEY, slug TEXT NOT NULL UNIQUE, title JSONB NOT NULL,
+    blocks JSONB NOT NULL DEFAULT '[]', seo_meta JSONB NOT NULL DEFAULT '{}',
+    content_type TEXT NOT NULL DEFAULT 'page', published_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+    workflow_status TEXT NOT NULL DEFAULT 'draft', version INTEGER NOT NULL DEFAULT 1,
+    created_by UUID, distribution JSONB
+);
+CREATE TABLE nav_items (
+    id UUID PRIMARY KEY, label JSONB NOT NULL, parent_id UUID, sort_order INTEGER NOT NULL DEFAULT 0,
+    visible BOOLEAN NOT NULL DEFAULT TRUE, locale TEXT, link_type TEXT NOT NULL DEFAULT 'internal',
+    url TEXT NOT NULL, starts_at TIMESTAMPTZ, ends_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE banners (
+    id UUID PRIMARY KEY, title JSONB NOT NULL, subtitle JSONB, media JSONB NOT NULL DEFAULT '{}',
+    cta JSONB, placement TEXT NOT NULL DEFAULT 'homepage', priority INTEGER NOT NULL DEFAULT 0,
+    audience JSONB NOT NULL DEFAULT '{}', starts_at TIMESTAMPTZ, ends_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+    workflow_status TEXT NOT NULL DEFAULT 'draft', version INTEGER NOT NULL DEFAULT 1,
+    created_by UUID, distribution JSONB
+);
+CREATE TABLE announcements (
+    id UUID PRIMARY KEY, workflow_status TEXT NOT NULL DEFAULT 'draft',
+    version INTEGER NOT NULL DEFAULT 1, created_by UUID, message JSONB NOT NULL,
+    dismissible BOOLEAN NOT NULL DEFAULT TRUE, audience JSONB NOT NULL DEFAULT '{}',
+    placement TEXT NOT NULL DEFAULT 'global', starts_at TIMESTAMPTZ, ends_at TIMESTAMPTZ,
+    distribution JSONB, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE article_categories (
+    id UUID PRIMARY KEY, slug TEXT NOT NULL UNIQUE, title JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE articles (
+    id UUID PRIMARY KEY, title JSONB NOT NULL, body JSONB NOT NULL, slug TEXT NOT NULL UNIQUE,
+    seo_title TEXT, seo_description TEXT, category_id UUID, author_name TEXT,
+    featured_image_url TEXT, workflow_status TEXT NOT NULL DEFAULT 'draft',
+    view_count INTEGER NOT NULL DEFAULT 0, share_count INTEGER NOT NULL DEFAULT 0,
+    published_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE fatwa_categories (
+    id UUID PRIMARY KEY, slug TEXT NOT NULL UNIQUE, title JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE fiqh_topics (
+    id UUID PRIMARY KEY, title JSONB NOT NULL, description JSONB,
+    workflow_status TEXT NOT NULL DEFAULT 'draft', category_id UUID, author_name TEXT,
+    featured_image_url TEXT, view_count INTEGER NOT NULL DEFAULT 0,
+    share_count INTEGER NOT NULL DEFAULT 0, published_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE madhab_positions (
+    id UUID PRIMARY KEY, topic_id UUID NOT NULL, madhab TEXT NOT NULL,
+    position_text JSONB NOT NULL, evidence_refs JSONB,
+    workflow_status TEXT NOT NULL DEFAULT 'draft', created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE fiqh_knowledge_chunks (
+    id UUID PRIMARY KEY, chunk_text TEXT NOT NULL, embedding JSONB,
+    embedding_provider TEXT, embedding_model TEXT, embedding_projection TEXT,
+    source_type TEXT NOT NULL DEFAULT 'manual', source_ref JSONB,
+    source_library_item_ref TEXT, source_citation JSONB, topic_category TEXT,
+    madhab_scope TEXT, workflow_status TEXT NOT NULL DEFAULT 'draft',
+    approved_by UUID, ai_scopes JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE fatwa_submissions (
+    id UUID PRIMARY KEY, title JSONB NOT NULL, body TEXT NOT NULL, madhab TEXT,
+    evidence TEXT, author_id UUID NOT NULL, workflow_status TEXT NOT NULL DEFAULT 'draft',
+    version INTEGER NOT NULL DEFAULT 1, reviewed_by UUID, reviewed_at TIMESTAMPTZ,
+    published_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE question_clusters (
+    id UUID PRIMARY KEY, representative_question TEXT NOT NULL, embedding JSONB,
+    status TEXT NOT NULL DEFAULT 'open', answer TEXT, answered_by UUID,
+    answered_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE cluster_members (
+    id UUID PRIMARY KEY, cluster_id UUID NOT NULL, question_text TEXT NOT NULL,
+    user_id UUID NOT NULL, source TEXT NOT NULL DEFAULT 'direct',
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE user_saved_fatwas (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, fatwa_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL, UNIQUE(user_id, fatwa_id)
+);
+CREATE TABLE quiz_questions (
+    id UUID PRIMARY KEY, question_text JSONB NOT NULL, options JSONB NOT NULL,
+    correct_option INTEGER NOT NULL, source_chunk_id UUID NOT NULL,
+    difficulty TEXT NOT NULL DEFAULT 'medium', workflow_status TEXT NOT NULL DEFAULT 'draft',
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE quiz_attempts (
+    id UUID PRIMARY KEY, user_id UUID, lesson_id UUID, question_ids JSONB NOT NULL,
+    answers JSONB NOT NULL, score REAL NOT NULL DEFAULT 0.0, created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE verification_checks (
+    id UUID PRIMARY KEY, input_hash TEXT NOT NULL, input_excerpt TEXT,
+    verdict TEXT NOT NULL, matched_chunk_ids JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE trusted_external_sources (
+    id UUID PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL, domain TEXT,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE, allowed_paths JSONB NOT NULL DEFAULT '[]',
+    priority INTEGER NOT NULL DEFAULT 0, citation_required BOOLEAN NOT NULL DEFAULT TRUE,
+    last_checked_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE ingestion_runs (
+    id UUID PRIMARY KEY, source_type TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
+    stats JSONB NOT NULL DEFAULT '{}', started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE ai_usage_log (
+    id UUID PRIMARY KEY, user_id UUID, endpoint TEXT NOT NULL, model TEXT NOT NULL,
+    tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
+    cost_estimate REAL NOT NULL DEFAULT 0.0, created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE library_items (
+    id UUID PRIMARY KEY, title JSONB NOT NULL, description JSONB, transcript TEXT,
+    workflow_status TEXT NOT NULL DEFAULT 'draft', visibility TEXT NOT NULL DEFAULT 'public',
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE courses (
+    id UUID PRIMARY KEY, title JSONB NOT NULL, description JSONB,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE, visibility TEXT NOT NULL DEFAULT 'public',
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE course_cohorts (
+    id UUID PRIMARY KEY, course_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE cohort_enrollments (
+    id UUID PRIMARY KEY, cohort_id UUID NOT NULL, status TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
 );
 "#;
 
