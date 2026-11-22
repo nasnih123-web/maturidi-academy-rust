@@ -1,0 +1,13 @@
+{
+  "case": "content.preview unknown content type",
+  "auth": "bearer",
+  "method": "GET",
+  "path": "/api/v1/content/items/article/00000000-0000-0000-0000-000000000000/preview",
+  "body": null,
+  "expected_status": 404,
+  "expected": {
+    "error": {
+      "code": "unknown_content_type"
+    }
+  }
+}

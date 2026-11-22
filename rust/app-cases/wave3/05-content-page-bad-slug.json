@@ -1,0 +1,16 @@
+{
+  "case": "cms.page create bad slug",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/content/pages",
+  "body": {
+    "slug": "Bad Slug!",
+    "title": {"fa": "شرایط", "ar": "الشروط", "en": "Terms"}
+  },
+  "expected_status": 422,
+  "expected": {
+    "error": {
+      "code": "validation_error"
+    }
+  }
+}

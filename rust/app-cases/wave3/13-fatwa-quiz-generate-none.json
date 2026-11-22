@@ -1,0 +1,13 @@
+{
+  "case": "fatwa.quiz generate no eligible questions",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/fatwa/quiz/generate?count=1",
+  "body": null,
+  "expected_status": 404,
+  "expected": {
+    "error": {
+      "code": "no_quiz_questions"
+    }
+  }
+}

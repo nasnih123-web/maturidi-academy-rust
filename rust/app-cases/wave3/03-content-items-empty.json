@@ -1,0 +1,12 @@
+{
+  "case": "content.items empty registry",
+  "auth": "bearer",
+  "method": "GET",
+  "path": "/api/v1/content/items",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "items": [],
+    "total": 0
+  }
+}

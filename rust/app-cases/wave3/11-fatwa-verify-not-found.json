@@ -1,0 +1,14 @@
+{
+  "case": "verify.check no chunks at all",
+  "method": "POST",
+  "path": "/api/v1/verify/check",
+  "body": {
+    "text": "آب و هوای امروز تهران چگونه است؟"
+  },
+  "expected_status": 200,
+  "expected": {
+    "verdict": "not_found",
+    "matched": [],
+    "note": "مورد مشابهی یافت نشد"
+  }
+}

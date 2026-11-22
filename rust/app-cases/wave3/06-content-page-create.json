@@ -1,0 +1,19 @@
+{
+  "case": "cms.page create draft",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/content/pages",
+  "body": {
+    "slug": "terms",
+    "title": {"fa": "شرایط استفاده", "ar": "شروط الاستخدام", "en": "Terms of Use"},
+    "blocks": [],
+    "content_type": "article"
+  },
+  "expected_status": 201,
+  "expected": {
+    "id": "<uuid>",
+    "slug": "terms",
+    "workflow_status": "draft",
+    "version": 1
+  }
+}

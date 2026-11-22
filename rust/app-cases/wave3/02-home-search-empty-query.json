@@ -1,0 +1,12 @@
+{
+  "case": "home.search blank query rejected",
+  "method": "GET",
+  "path": "/api/v1/search?q=%20%20",
+  "body": null,
+  "expected_status": 422,
+  "expected": {
+    "error": {
+      "code": "invalid_query"
+    }
+  }
+}

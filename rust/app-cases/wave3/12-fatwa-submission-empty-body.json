@@ -1,0 +1,16 @@
+{
+  "case": "fatwa.submission blank body rejected",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/fatwa/submissions",
+  "body": {
+    "title": {"fa": "سوال", "ar": "سؤال", "en": "Question"},
+    "body": "   "
+  },
+  "expected_status": 422,
+  "expected": {
+    "error": {
+      "code": "empty_body"
+    }
+  }
+}

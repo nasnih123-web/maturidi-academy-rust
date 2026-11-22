@@ -1,0 +1,8 @@
+{
+  "case": "fatwa.categories derived from chunks, none yet",
+  "method": "GET",
+  "path": "/api/v1/fatwa/categories",
+  "body": null,
+  "expected_status": 200,
+  "expected": []
+}

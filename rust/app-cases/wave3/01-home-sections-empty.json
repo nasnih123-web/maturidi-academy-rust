@@ -1,0 +1,11 @@
+{
+  "case": "home.sections empty by default",
+  "method": "GET",
+  "path": "/api/v1/home/sections",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "theme": null,
+    "sections": []
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "case": "articles.category create bad slug",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/admin/articles/categories",
+  "body": {
+    "slug": "Bad Slug",
+    "title": {"fa": "فقه", "ar": "الفقه", "en": "Fiqh"}
+  },
+  "expected_status": 422,
+  "expected": {
+    "error": {
+      "code": "validation_error"
+    }
+  }
+}

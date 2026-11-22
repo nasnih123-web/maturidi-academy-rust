@@ -1,0 +1,17 @@
+{
+  "case": "articles.create bad slug",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/admin/articles",
+  "body": {
+    "title": {"fa": "مقاله", "ar": "مقالة", "en": "Article"},
+    "body": {},
+    "slug": "bad slug"
+  },
+  "expected_status": 422,
+  "expected": {
+    "error": {
+      "code": "validation_error"
+    }
+  }
+}
