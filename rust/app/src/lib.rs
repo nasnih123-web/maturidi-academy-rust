@@ -32,6 +32,7 @@ use tokio::sync::Mutex;
 
 use crate::ratelimit::RateLimiter;
 
+mod adhan;
 mod audit;
 mod auth_service;
 mod authn;
@@ -41,10 +42,14 @@ mod crypto;
 mod db;
 mod embeddings;
 mod errors;
+mod hifz_logic;
+mod hifz_mutashabihat;
 mod hijri;
 mod jwt;
 mod localized;
 mod mail;
+mod quran_data;
+mod quran_providers;
 mod ratelimit;
 mod routes_activity;
 mod routes_api_keys;
@@ -52,11 +57,14 @@ mod routes_articles;
 mod routes_auth;
 mod routes_content;
 mod routes_fatwa;
+mod routes_hifz;
 mod routes_home;
 mod routes_meta;
+mod routes_quran;
 mod routes_users;
 mod settings;
 mod storage;
+mod sync;
 mod totp;
 mod validate;
 mod workflow;
@@ -564,6 +572,210 @@ pub fn build_router(state: AppState) -> Router {
             .route(
                 "/api/v1/content/public/calendar/theme",
                 get(routes_content::public_calendar_theme),
+            );
+    }
+    if unit_native("QURAN") {
+        router = router
+            .route("/api/v1/quran/surahs", get(routes_quran::list_surahs))
+            .route("/api/v1/quran/surah/{number}", get(routes_quran::get_surah))
+            .route(
+                "/api/v1/quran/ayah/{surah}/{ayah}",
+                get(routes_quran::get_ayah),
+            )
+            .route(
+                "/api/v1/quran/recitation/reciters",
+                get(routes_quran::list_recitation_reciters),
+            )
+            .route(
+                "/api/v1/quran/recitation/timing/generated",
+                get(routes_quran::get_generated_timing),
+            )
+            .route(
+                "/api/v1/quran/recitation/timing",
+                get(routes_quran::get_recitation_timing),
+            )
+            .route("/api/v1/quran/providers", get(routes_quran::get_providers))
+            .route(
+                "/api/v1/quran/registry/custom-providers/{provider_id}/key",
+                put(routes_quran::set_custom_provider_key),
+            )
+            .route(
+                "/api/v1/quran/munajat/status",
+                get(routes_quran::munajat_status),
+            )
+            .route(
+                "/api/v1/quran/notes",
+                post(routes_quran::create_note).get(routes_quran::list_notes),
+            )
+            .route(
+                "/api/v1/quran/notes/{note_id}",
+                put(routes_quran::update_note).delete(routes_quran::delete_note),
+            )
+            .route(
+                "/api/v1/quran/reading-state",
+                get(routes_quran::get_reading_state).put(routes_quran::put_reading_state),
+            )
+            .route("/api/v1/tasbih/sessions", post(routes_quran::tasbih_start))
+            .route(
+                "/api/v1/tasbih/sessions/{session_id}/count",
+                post(routes_quran::tasbih_count),
+            )
+            .route("/api/v1/tasbih/today", get(routes_quran::tasbih_today))
+            .route("/api/v1/adhan/times", get(routes_quran::adhan_times))
+            .route("/api/v1/adhan/range", get(routes_quran::adhan_range))
+            .route("/api/v1/adhan/options", get(routes_quran::adhan_options))
+            .route("/api/v1/adhan/geocode", get(routes_quran::adhan_geocode))
+            .route("/api/v1/adhan/reverse", get(routes_quran::adhan_reverse));
+    }
+    if unit_native("HIFZ") {
+        router = router
+            .route("/api/v1/quran/hifz/status", get(routes_hifz::hifz_status))
+            .route(
+                "/api/v1/quran/hifz/attempts",
+                post(routes_hifz::create_attempt).get(routes_hifz::list_attempts),
+            )
+            .route(
+                "/api/v1/quran/hifz/attempts/resume",
+                get(routes_hifz::resume_attempt_lookup),
+            )
+            .route(
+                "/api/v1/quran/hifz/attempts/{attempt_id}",
+                get(routes_hifz::get_attempt).delete(routes_hifz::delete_attempt),
+            )
+            .route(
+                "/api/v1/quran/hifz/attempts/{attempt_id}/complete",
+                post(routes_hifz::complete_attempt),
+            )
+            .route(
+                "/api/v1/quran/hifz/attempts/{attempt_id}/position",
+                patch(routes_hifz::update_position),
+            )
+            .route(
+                "/api/v1/quran/hifz/attempts/{attempt_id}/pause",
+                post(routes_hifz::pause_attempt),
+            )
+            .route(
+                "/api/v1/quran/hifz/attempts/{attempt_id}/resume",
+                post(routes_hifz::resume_attempt),
+            )
+            .route(
+                "/api/v1/quran/hifz/attempts/{attempt_id}/mistakes",
+                get(routes_hifz::attempt_mistakes),
+            )
+            .route(
+                "/api/v1/quran/hifz/attempts/{attempt_id}/peek",
+                post(routes_hifz::peek_word),
+            )
+            .route(
+                "/api/v1/quran/hifz/attempts/{attempt_id}/dispute",
+                post(routes_hifz::dispute_word),
+            )
+            .route(
+                "/api/v1/quran/hifz/attempts/{attempt_id}/stream",
+                get(routes_hifz::hifz_stream_unavailable),
+            )
+            .route(
+                "/api/v1/quran/hifz/mistakes/{mistake_id}",
+                delete(routes_hifz::delete_mistake),
+            )
+            .route(
+                "/api/v1/quran/hifz/settings",
+                get(routes_hifz::get_settings).put(routes_hifz::put_settings),
+            )
+            .route(
+                "/api/v1/quran/hifz/listen-position",
+                get(routes_hifz::get_listen_position)
+                    .put(routes_hifz::put_listen_position)
+                    .delete(routes_hifz::delete_listen_position),
+            )
+            .route("/api/v1/quran/hifz/stats", get(routes_hifz::hifz_stats))
+            .route("/api/v1/quran/hifz/review", get(routes_hifz::hifz_review))
+            .route(
+                "/api/v1/quran/hifz/admin/attempts",
+                get(routes_hifz::admin_list_attempts),
+            )
+            .route(
+                "/api/v1/quran/hifz/admin/attempts/{attempt_id}",
+                delete(routes_hifz::admin_delete_attempt),
+            )
+            .route(
+                "/api/v1/quran/hifz/reviews",
+                post(routes_hifz::record_review),
+            )
+            .route(
+                "/api/v1/quran/hifz/reviews/due",
+                get(routes_hifz::due_reviews),
+            )
+            .route(
+                "/api/v1/quran/hifz/plans",
+                post(routes_hifz::create_plan).get(routes_hifz::list_plans_handler),
+            )
+            .route(
+                "/api/v1/quran/hifz/plans/{plan_id}",
+                get(routes_hifz::get_plan)
+                    .patch(routes_hifz::set_plan_status)
+                    .delete(routes_hifz::delete_plan),
+            )
+            .route(
+                "/api/v1/quran/hifz/plans/{plan_id}/items/{item_id}",
+                patch(routes_hifz::set_plan_item),
+            )
+            .route("/api/v1/quran/hifz/dashboard", get(routes_hifz::hifz_dashboard))
+            .route("/api/v1/quran/hifz/activity", get(routes_hifz::hifz_activity))
+            .route("/api/v1/quran/hifz/suggested", get(routes_hifz::hifz_suggested))
+            .route(
+                "/api/v1/quran/hifz/tests",
+                post(routes_hifz::create_test).get(routes_hifz::list_tests),
+            )
+            .route(
+                "/api/v1/quran/hifz/tests/{test_id}",
+                get(routes_hifz::get_test).delete(routes_hifz::delete_test),
+            )
+            .route(
+                "/api/v1/quran/hifz/tests/{test_id}/complete",
+                post(routes_hifz::complete_test),
+            )
+            .route(
+                "/api/v1/quran/hifz/tests/{test_id}/questions/{question_id}/skip",
+                post(routes_hifz::skip_test_question),
+            )
+            .route(
+                "/api/v1/quran/hifz/tests/{test_id}/questions/{question_id}/peek",
+                post(routes_hifz::peek_test_question),
+            )
+            .route(
+                "/api/v1/quran/hifz/tests/{test_id}/questions/{question_id}/events/{event_index}/remove",
+                post(routes_hifz::remove_test_event),
+            )
+            .route(
+                "/api/v1/quran/hifz/mutashabihat",
+                get(routes_hifz::mutashabihat),
+            )
+            .route(
+                "/api/v1/quran/hifz/mutashabihat/phrase",
+                get(routes_hifz::mutashabihat_phrase),
+            )
+            .route(
+                "/api/v1/quran/hifz/mutashabihat/count",
+                get(routes_hifz::mutashabihat_count),
+            )
+            .route(
+                "/api/v1/quran/hifz/tasmi/sessions",
+                post(routes_hifz::create_tasmi).get(routes_hifz::list_tasmi),
+            )
+            .route(
+                "/api/v1/quran/hifz/tasmi/sessions/{session_id}",
+                get(routes_hifz::get_tasmi)
+                    .patch(routes_hifz::patch_tasmi)
+                    .delete(routes_hifz::delete_tasmi),
+            )
+            .route(
+                "/api/v1/quran/hifz/data/preview",
+                get(routes_hifz::data_preview),
+            )
+            .route(
+                "/api/v1/quran/hifz/data/purge",
+                post(routes_hifz::data_purge),
             );
     }
     if unit_native("META") {

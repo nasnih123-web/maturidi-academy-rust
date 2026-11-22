@@ -563,7 +563,7 @@ CREATE TABLE themes (
     created_at TIMESTAMPTZ NOT NULL
 );
 CREATE TABLE platform_settings (
-    key TEXT PRIMARY KEY, value TEXT NOT NULL, encryption_key_version INTEGER NOT NULL DEFAULT 1
+    key TEXT PRIMARY KEY, value JSONB NOT NULL, encryption_key_version INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE api_keys (
     id UUID PRIMARY KEY, key_hash TEXT NOT NULL UNIQUE, key_prefix TEXT NOT NULL,
@@ -796,6 +796,121 @@ CREATE TABLE course_cohorts (
 CREATE TABLE cohort_enrollments (
     id UUID PRIMARY KEY, cohort_id UUID NOT NULL, status TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE user_reading_states (
+    user_id UUID PRIMARY KEY, bookmarks JSONB NOT NULL DEFAULT '[]', last_read JSONB,
+    state_updated_at BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE dhikr_sessions (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, dhikr_text TEXT NOT NULL,
+    target_count INTEGER, count INTEGER NOT NULL DEFAULT 0,
+    started_at TIMESTAMPTZ NOT NULL, ended_at TIMESTAMPTZ
+);
+CREATE TABLE dhikr_daily_counts (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, date DATE NOT NULL, dhikr_text TEXT NOT NULL,
+    total_count INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE sync_changelog (
+    seq INTEGER PRIMARY KEY, user_id UUID NOT NULL, device_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, op_type TEXT NOT NULL,
+    payload JSONB, version INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE sync_tombstones (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL, deleted_by UUID, deleted_at TIMESTAMPTZ NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE hifz_attempts (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, surah INTEGER NOT NULL, page INTEGER,
+    status TEXT NOT NULL DEFAULT 'in_progress', engine TEXT NOT NULL DEFAULT 'zipformer',
+    extra_words JSONB NOT NULL DEFAULT '[]', start_ayah INTEGER, end_ayah INTEGER,
+    current_surah INTEGER, current_ayah INTEGER, current_word_index INTEGER,
+    repeat_ayah INTEGER NOT NULL DEFAULT 1, repeat_range INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ, completed_at TIMESTAMPTZ
+);
+CREATE TABLE hifz_word_scores (
+    id UUID PRIMARY KEY, attempt_id UUID NOT NULL, surah INTEGER NOT NULL,
+    ayah INTEGER NOT NULL, word_index INTEGER NOT NULL, expected_text TEXT NOT NULL,
+    status TEXT NOT NULL, prob FLOAT NOT NULL DEFAULT 0, heard TEXT,
+    mistake_type TEXT, disputed BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ,
+    UNIQUE (attempt_id, surah, ayah, word_index)
+);
+CREATE TABLE hifz_mistakes (
+    id UUID PRIMARY KEY, attempt_id UUID NOT NULL, user_id UUID NOT NULL,
+    surah INTEGER NOT NULL, ayah INTEGER NOT NULL, word_index INTEGER,
+    mistake_type TEXT NOT NULL, expected_text TEXT NOT NULL, heard TEXT,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE hifz_user_settings (
+    user_id UUID PRIMARY KEY, freeze_on_error BOOLEAN NOT NULL DEFAULT FALSE,
+    mistake_detection BOOLEAN NOT NULL DEFAULT TRUE,
+    tashkeel_detection BOOLEAN NOT NULL DEFAULT TRUE,
+    resumable_sessions BOOLEAN NOT NULL DEFAULT FALSE,
+    hide_ayah_markers BOOLEAN NOT NULL DEFAULT FALSE,
+    daily_goal_ayahs INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ
+);
+CREATE TABLE hifz_listen_positions (
+    user_id UUID PRIMARY KEY, reciter TEXT NOT NULL DEFAULT 'alafasy',
+    surah INTEGER NOT NULL DEFAULT 1, ayah INTEGER NOT NULL DEFAULT 1,
+    progress_ms INTEGER NOT NULL DEFAULT 0, speed FLOAT NOT NULL DEFAULT 1.0,
+    repeat_mode TEXT NOT NULL DEFAULT 'off', repeat_ayah INTEGER NOT NULL DEFAULT 1,
+    repeat_range_start INTEGER, repeat_range_end INTEGER,
+    repeat_range_count INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ
+);
+CREATE TABLE hifz_reviews (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, surah INTEGER NOT NULL,
+    ayah INTEGER NOT NULL, ease FLOAT NOT NULL DEFAULT 2.5,
+    interval_days INTEGER NOT NULL DEFAULT 0, repetitions INTEGER NOT NULL DEFAULT 0,
+    due_at TIMESTAMPTZ, last_quality INTEGER, last_reviewed_at TIMESTAMPTZ,
+    params_version INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ,
+    UNIQUE (user_id, surah, ayah)
+);
+CREATE TABLE hifz_plans (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, title TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'memorize', direction TEXT NOT NULL DEFAULT 'normal',
+    start_surah INTEGER NOT NULL, start_ayah INTEGER NOT NULL,
+    end_surah INTEGER NOT NULL, end_ayah INTEGER NOT NULL,
+    daily_target_new INTEGER NOT NULL DEFAULT 1,
+    daily_target_review INTEGER NOT NULL DEFAULT 5,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ, completed_at TIMESTAMPTZ
+);
+CREATE TABLE hifz_plan_items (
+    id UUID PRIMARY KEY, plan_id UUID NOT NULL, user_id UUID NOT NULL,
+    surah INTEGER NOT NULL, ayah INTEGER NOT NULL, position INTEGER NOT NULL,
+    is_new BOOLEAN NOT NULL DEFAULT TRUE, status TEXT NOT NULL DEFAULT 'pending',
+    completed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (plan_id, surah, ayah)
+);
+CREATE TABLE hifz_tests (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, surah_start INTEGER NOT NULL,
+    surah_end INTEGER NOT NULL, question_count INTEGER NOT NULL DEFAULT 10,
+    time_limit_minutes INTEGER, question_length TEXT NOT NULL DEFAULT 'medium',
+    stop_rule TEXT NOT NULL DEFAULT 'ayah_end', status TEXT NOT NULL DEFAULT 'in_progress',
+    started_at TIMESTAMPTZ NOT NULL, ends_at TIMESTAMPTZ, completed_at TIMESTAMPTZ
+);
+CREATE TABLE hifz_test_questions (
+    id UUID PRIMARY KEY, test_id UUID NOT NULL, position INTEGER NOT NULL,
+    surah INTEGER NOT NULL, ayah_start INTEGER NOT NULL, ayah_end INTEGER NOT NULL,
+    prompt_words INTEGER NOT NULL DEFAULT 3, prompt TEXT, status TEXT NOT NULL DEFAULT 'pending',
+    score FLOAT, counts JSONB NOT NULL DEFAULT '{}', peek_count INTEGER NOT NULL DEFAULT 0,
+    raw_events JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ NOT NULL, answered_at TIMESTAMPTZ,
+    UNIQUE (test_id, position)
+);
+CREATE TABLE hifz_tasmi_sessions (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, method TEXT NOT NULL,
+    variant TEXT NOT NULL DEFAULT 'standard', start_surah INTEGER NOT NULL,
+    start_ayah INTEGER NOT NULL, end_surah INTEGER NOT NULL, end_ayah INTEGER NOT NULL,
+    state JSONB NOT NULL DEFAULT '{}', self_assessed BOOLEAN NOT NULL DEFAULT TRUE,
+    reflection TEXT, status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ, completed_at TIMESTAMPTZ
 );
 "#;
 
