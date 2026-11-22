@@ -1,0 +1,1 @@
+{"auth":"user","body":{"reason":"محتوای نامناسب","target_id":"<post_id>","target_type":"post"},"case":"social.report (201, status new, sla_due_at ~24h after reported_at)","expected":{"actioned_at":null,"status":"new","target_type":"post","triaged_at":null},"expected_status":201,"method":"POST","path":"/api/v1/social/report"}

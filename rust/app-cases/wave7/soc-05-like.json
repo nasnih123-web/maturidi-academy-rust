@@ -1,0 +1,1 @@
+{"auth":"user","body":null,"case":"social.like_post idempotent (second like returns the same count)","expected":{"liked":true,"likes_count":1},"expected_status":200,"method":"POST","path":"/api/v1/social/posts/<post_id>/like"}

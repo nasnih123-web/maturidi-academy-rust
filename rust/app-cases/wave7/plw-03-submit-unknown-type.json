@@ -1,0 +1,1 @@
+{"auth":"none","body":{"lat":35.24,"lng":60.62,"name":{"ar":"","en":"","fa":"مسجد تست"},"type":"nope"},"case":"places.submit unknown type (422 unknown_place_type)","expected":{"error":{"code":"unknown_place_type"}},"expected_status":422,"method":"POST","path":"/api/v1/places/submissions"}

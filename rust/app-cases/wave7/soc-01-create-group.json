@@ -1,0 +1,1 @@
+{"auth":"moderator","body":{"is_public":true,"name":{"ar":"مجموعة الفقه","en":"Fiqh Group","fa":"گروه فقه"}},"case":"social.create_group (moderator: 201, creator is moderator member, member_count 1)","expected":{"is_member":true,"is_public":true,"member_count":1,"slug":"گروه-فقه"},"expected_status":201,"method":"POST","path":"/api/v1/social/groups"}

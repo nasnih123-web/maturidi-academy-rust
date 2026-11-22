@@ -1,0 +1,1 @@
+{"auth":"moderator","body":{"action":"triage"},"case":"social.report_action triage (moderator: triaged; second triage 422 invalid_report_state)","expected":{"action":"triage","status":"triaged"},"expected_status":200,"method":"POST","path":"/api/v1/admin/social/reports/<report_id>/action"}

@@ -1,0 +1,1 @@
+{"auth":"none","body":"not json","case":"finance.webhook with a malformed JSON body","expected":{"error":{"code":"bad_webhook_payload"}},"expected_status":400,"method":"POST","path":"/api/v1/finance/webhook/zarinpal"}

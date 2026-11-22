@@ -1,0 +1,1 @@
+{"auth":"user","body":null,"case":"social.notifications unread-count (object with unread count for the caller only)","expected":{"unread":"integer, count of the caller's unread notifications"},"expected_status":200,"method":"GET","path":"/api/v1/social/notifications/unread-count"}

@@ -1,0 +1,1 @@
+{"auth":"bearer","body":null,"case":"sync.conflicts pending list (both versions kept, newest first)","expected":{"items":"array of {id, entity_type, entity_id, local_payload, remote_payload, local_version, remote_version, resolution=pending}","total":"count of pending conflicts"},"expected_status":200,"method":"GET","path":"/api/v1/sync/conflicts"}

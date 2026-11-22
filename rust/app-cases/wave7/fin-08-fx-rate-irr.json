@@ -1,0 +1,1 @@
+{"auth":"bearer","body":null,"case":"finance.fx-rate for IRR is fixed at 1","expected":{"currency":"IRR","rate_irr":1,"source":"fixed"},"expected_status":200,"method":"GET","path":"/api/v1/admin/finance/fx-rate?currency=IRR"}

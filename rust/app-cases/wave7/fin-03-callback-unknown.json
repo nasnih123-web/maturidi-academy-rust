@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"finance.callback for an unknown authority","expected":{"error":{"code":"intent_not_found"}},"expected_status":404,"method":"GET","path":"/api/v1/finance/callback?Authority=NOPE&Status=OK"}

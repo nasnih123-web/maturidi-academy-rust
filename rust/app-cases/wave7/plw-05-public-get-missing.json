@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"places.public get missing id (404 place_not_found)","expected":{"error":{"code":"place_not_found"}},"expected_status":404,"method":"GET","path":"/api/v1/places/00000000-0000-0000-0000-000000000000"}

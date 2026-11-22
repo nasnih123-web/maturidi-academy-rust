@@ -1,0 +1,1 @@
+{"auth":"bearer","body":null,"case":"sync.pull changes after cursor 0 (seq-ordered changelog, cursor advances)","expected":{"changes":"array of {seq, entity_type, entity_id, op_type, payload, version, device_id, created_at}","new_cursor":"max seq returned"},"expected_status":200,"method":"GET","path":"/api/v1/sync/pull?cursor=0&device_id=dev-1"}

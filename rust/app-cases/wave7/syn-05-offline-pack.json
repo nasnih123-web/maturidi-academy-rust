@@ -1,0 +1,1 @@
+{"auth":"bearer","body":null,"case":"sync.offline-pack (started lessons first, then followed, then popular; no ML)","expected":{"items":"array of {kind, ref_id, title, score, reason} sorted by -score, kind, ref_id","generated_at":"ISO timestamp"},"expected_status":200,"method":"GET","path":"/api/v1/sync/offline-pack"}

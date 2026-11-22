@@ -1,0 +1,1 @@
+{"auth":"none","body":{"amount":100000},"case":"finance.donate with unconfigured gateway","expected":{"error":{"code":"payment_not_configured"}},"expected_status":503,"headers":{"Idempotency-Key":"fin-case-02"},"method":"POST","path":"/api/v1/finance/donate"}

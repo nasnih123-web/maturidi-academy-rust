@@ -1,0 +1,1 @@
+{"auth":"header X-Telegram-Bot-Api-Secret-Token","body":{"update_id":1,"message":{"text":"hi"}},"case":"telegram.webhook non-callback update is ignored after secret verification","expected":{"ok":true,"ignored":true},"expected_status":200,"method":"POST","path":"/api/v1/telegram/webhook"}

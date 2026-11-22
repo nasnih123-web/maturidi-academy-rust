@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"widgets.ayah-of-day without key (401 api_key_required)","expected":{"error":{"code":"api_key_required"}},"expected_status":401,"method":"GET","path":"/api/v1/widgets/ayah-of-day"}

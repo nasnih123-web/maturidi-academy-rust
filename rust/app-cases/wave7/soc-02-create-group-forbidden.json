@@ -1,0 +1,1 @@
+{"auth":"user","body":{"is_public":true,"name":{"ar":"مجموعة","en":"Group","fa":"گروه"}},"case":"social.create_group (plain user without social.moderate: 403 forbidden)","expected":{"error":{"code":"forbidden"}},"expected_status":403,"method":"POST","path":"/api/v1/social/groups"}

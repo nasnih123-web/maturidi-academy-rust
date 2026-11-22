@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"places.list (guest: published only, empty)","expected":{"items":[],"total":0},"expected_status":200,"method":"GET","path":"/api/v1/places"}

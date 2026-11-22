@@ -1,0 +1,1 @@
+{"auth":"none","body":{"lat":35.24,"lng":60.62,"name":{"ar":"","en":"","fa":"مسجد تست"},"type":"mosque"},"case":"places.admin create without auth (401)","expected":{"error":{"code":"unauthorized"}},"expected_status":401,"method":"POST","path":"/api/v1/admin/places"}

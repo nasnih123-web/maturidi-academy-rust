@@ -1,0 +1,1 @@
+{"auth":"user","body":null,"case":"social.feed (guest cursor page: published posts newest first)","expected":{"items":"array, each with id/group_id/author_id/body/status=published/comment_count/likes_count/liked/created_at","next_cursor":"null when the page is exhausted"},"expected_status":200,"method":"GET","path":"/api/v1/social/feed?limit=20"}

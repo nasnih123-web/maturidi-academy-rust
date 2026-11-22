@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"widgets.prayer-times without key (401 api_key_required)","expected":{"error":{"code":"api_key_required"}},"expected_status":401,"method":"GET","path":"/api/v1/widgets/prayer-times?lat=35.72&lng=51.33"}

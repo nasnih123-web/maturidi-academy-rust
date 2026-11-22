@@ -1,0 +1,1 @@
+{"auth":"bearer","body":{"resolution":"keep_local","note":"دستگاه برنده"},"case":"sync.resolve conflict keep_local (device version wins, note version bumps)","expected":{"resolution":"keep_local","applied_version":"note version after applying the local payload"},"expected_status":200,"method":"POST","path":"/api/v1/sync/conflicts/00000000-0000-0000-0000-000000000001/resolve"}

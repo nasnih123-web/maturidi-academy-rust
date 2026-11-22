@@ -1,0 +1,1 @@
+{"auth":"none","body":{"amount":100000},"case":"finance.donate without Idempotency-Key","expected":{"error":{"code":"missing_idempotency_key"}},"expected_status":422,"method":"POST","path":"/api/v1/finance/donate"}

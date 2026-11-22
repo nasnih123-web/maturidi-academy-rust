@@ -1,0 +1,1 @@
+{"auth":"user","body":{"body":"متن دارای واژهٔ ممنوعه"},"case":"social.create_post with banned word (normalized match: 422 content_policy_violation, word never echoed)","expected":{"error":{"code":"content_policy_violation"}},"expected_status":422,"method":"POST","path":"/api/v1/social/posts"}
