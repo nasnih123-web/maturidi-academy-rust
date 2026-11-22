@@ -1,0 +1,6 @@
+/target
+rust/app/target
+*.log
+.env
+.DS_Store
+*.swp
