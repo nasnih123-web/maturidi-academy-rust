@@ -6,7 +6,8 @@
 //! reject, receipt scan gate, proof image), campaigns (public + admin
 //! CRUD), admin donation/ledger lists with cursor pagination,
 //! reconciliation, gateway statuses, FX rates, recurring donations,
-//! and the proxied receipt route (502 with a dead origin).
+//! and the sidecar receipt route (503 `receipt_pdf_unavailable` with
+//! `SIDECAR_URL` unset).
 //!
 //! Each test builds a fresh in-memory sqlite DB (`TEST_SCHEMA`) and a
 //! fresh `AppState`, then drives the real Axum router with `oneshot` —
@@ -37,8 +38,6 @@ fn test_config() -> Config {
         jwt_secret: "test-jwt-secret-for-wave7-finance-tests-only".to_string(),
         encryption_key: "test-encryption-key-wave7".to_string(),
         captcha_enabled: false,
-        // Dead port: native routes must never touch the origin.
-        origin_url: "http://127.0.0.1:9".to_string(),
         storage_dir: format!(
             "{}/wave7-finance-storage-{}",
             std::env::temp_dir().display(),
@@ -1686,9 +1685,10 @@ async fn fx_rate_fixed_invalid_and_unavailable() {
 }
 
 #[tokio::test]
-async fn receipt_route_is_proxied_not_native() {
-    // FIN-01: the receipt PDF needs reportlab, so the route is not
-    // registered natively — with a dead origin it answers 502.
+async fn receipt_route_is_sidecar_not_native() {
+    // FIN-01 / ADR-134: the receipt PDF needs reportlab, so the route
+    // is a sidecar-contract route — with SIDECAR_URL unset it answers
+    // 503 receipt_pdf_unavailable.
     let env = Env::sqlite().await;
     let (_uid, token, _) = register_user(&env, "owner@example.com").await;
     let id = Uuid::new_v4();
@@ -1698,8 +1698,8 @@ async fn receipt_route_is_proxied_not_native() {
             &token,
         ))
         .await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
-    assert_eq!(body["status"], json!("bad_gateway"));
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(err_code(&body), "receipt_pdf_unavailable");
 }
 
 // ============================ Postgres smoke ===============================

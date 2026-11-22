@@ -44,8 +44,6 @@ fn test_config() -> Config {
         jwt_secret: "test-jwt-secret-for-wave6-library-tests-only".to_string(),
         encryption_key: "test-encryption-key-wave6".to_string(),
         captcha_enabled: false,
-        // Dead port: native routes must never touch the origin.
-        origin_url: "http://127.0.0.1:9".to_string(),
         storage_dir: format!(
             "{}/wave6-library-storage-{}",
             std::env::temp_dir().display(),

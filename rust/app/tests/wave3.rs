@@ -32,8 +32,6 @@ fn test_config() -> Config {
         app_env: "test".to_string(),
         jwt_secret: "wave2-test-jwt-secret-that-is-long-enough".to_string(),
         captcha_enabled: false,
-        // Dead port: native routes must never touch the origin.
-        origin_url: "http://127.0.0.1:9".to_string(),
         storage_dir: format!(
             "{}/wave3-storage-{}",
             std::env::temp_dir().display(),

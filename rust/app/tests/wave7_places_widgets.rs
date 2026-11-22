@@ -40,8 +40,6 @@ fn test_config() -> Config {
         jwt_secret: "test-jwt-secret-for-wave7-places-widgets-only".to_string(),
         encryption_key: "test-encryption-key-wave7".to_string(),
         captcha_enabled: false,
-        // Dead port: native routes must never touch the origin.
-        origin_url: "http://127.0.0.1:9".to_string(),
         storage_dir: format!(
             "{}/wave7-places-widgets-storage-{}",
             std::env::temp_dir().display(),

@@ -10,9 +10,10 @@
 //! path against a local Postgres test database.
 //!
 //! ASR endpoints (`grade`, `grade-word`, `voice-search`, test `answer`)
-//! are deliberately NOT native: they fall through to the proxy, and the
-//! live WebSocket stream answers 503 `hifz_live_unavailable` — both are
-//! asserted here (see `hifz_grade_proxied` and
+//! are deliberately NOT native: they are sidecar-contract routes
+//! (ADR-134), and the live WebSocket stream answers 503
+//! `hifz_live_unavailable` — both are asserted here (see
+//! `hifz_grade_sidecar_and_stream_unavailable` and
 //! `hifz_stream_unavailable`).
 
 use axum::{
@@ -36,8 +37,6 @@ fn test_config() -> Config {
         app_env: "test".to_string(),
         jwt_secret: "wave2-test-jwt-secret-that-is-long-enough".to_string(),
         captcha_enabled: false,
-        // Dead port: native routes must never touch the origin.
-        origin_url: "http://127.0.0.1:9".to_string(),
         storage_dir: format!(
             "{}/wave4-storage-{}",
             std::env::temp_dir().display(),
@@ -2402,15 +2401,15 @@ async fn hifz_data_purge() {
 // ============================ Hifz: ASR proxy + live stream ===========================
 
 #[tokio::test]
-async fn hifz_grade_proxied_and_stream_unavailable() {
+async fn hifz_grade_sidecar_and_stream_unavailable() {
     let env = Env::sqlite().await;
     let (_uid, token, _) = register_user(&env, "grade@example.com").await;
     let body = create_attempt(&env, &token).await;
     let attempt_id = body["id"].as_str().unwrap().to_string();
 
     // The grade endpoint is NOT native (no ASR in the Rust binary):
-    // it falls through to the proxy, and with a dead origin the proxy
-    // answers 502 bad_gateway.
+    // it is a sidecar-contract route (ADR-134), and with SIDECAR_URL
+    // unset the sidecar answers 503 hifz_asr_unavailable.
     let (status, body) = env
         .call(authed(
             req(
@@ -2421,8 +2420,8 @@ async fn hifz_grade_proxied_and_stream_unavailable() {
             &token,
         ))
         .await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
-    assert_eq!(body["status"], json!("bad_gateway"));
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(err_code(&body), "hifz_asr_unavailable");
 
     // The live WebSocket stream cannot be relayed by the HTTP proxy, so
     // the route is registered explicitly as 503 hifz_live_unavailable.

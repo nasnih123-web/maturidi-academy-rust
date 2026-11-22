@@ -9,9 +9,9 @@
 //! path against a local Postgres test database.
 //!
 //! `POST /voice/transcribe` and `POST /voice/ask` are deliberately
-//! NOT native (no STT in the Rust binary — ADR-046): they fall
-//! through to the proxy, asserted here (`voice_transcribe_proxied`,
-//! `voice_ask_proxied`).
+//! NOT native (no STT in the Rust binary — ADR-046): they are
+//! sidecar-contract routes (ADR-134), asserted here
+//! (`voice_transcribe_sidecar_503`, `voice_ask_sidecar_503`).
 
 use axum::{
     body::Body,
@@ -35,8 +35,6 @@ fn test_config() -> Config {
         jwt_secret: "test-jwt-secret-for-wave5-tests-only".to_string(),
         encryption_key: "test-encryption-key-wave5".to_string(),
         captcha_enabled: false,
-        // Dead port: native routes must never touch the origin.
-        origin_url: "http://127.0.0.1:9".to_string(),
         storage_dir: format!(
             "{}/wave5-storage-{}",
             std::env::temp_dir().display(),
@@ -1762,25 +1760,25 @@ fn multipart_audio() -> (String, Vec<u8>) {
 }
 
 #[tokio::test]
-async fn voice_transcribe_proxied() {
+async fn voice_transcribe_sidecar_503() {
     let env = Env::sqlite().await;
     let (_, token, _) = register_user(&env, "asker@example.com").await;
     let (ct, body) = multipart_audio();
     // Transcribe is NOT native (no STT in the Rust binary, ADR-046):
-    // it falls through to the proxy, and with a dead origin the proxy
-    // answers 502 bad_gateway.
+    // it is a sidecar-contract route (ADR-134), and with SIDECAR_URL
+    // unset the sidecar answers 503 voice_stt_unavailable.
     let (status, resp) = env
         .call(authed(
             req_raw(Method::POST, "/api/v1/voice/transcribe", &ct, body),
             &token,
         ))
         .await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY, "{resp}");
-    assert_eq!(resp["status"], json!("bad_gateway"));
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{resp}");
+    assert_eq!(err_code(&resp), "voice_stt_unavailable");
 }
 
 #[tokio::test]
-async fn voice_ask_proxied() {
+async fn voice_ask_sidecar_503() {
     let env = Env::sqlite().await;
     let (_, token, _) = register_user(&env, "asker@example.com").await;
     let (ct, body) = multipart_audio();
@@ -1790,8 +1788,8 @@ async fn voice_ask_proxied() {
             &token,
         ))
         .await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY, "{resp}");
-    assert_eq!(resp["status"], json!("bad_gateway"));
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{resp}");
+    assert_eq!(err_code(&resp), "voice_stt_unavailable");
 }
 
 // ============================ Postgres smoke ===========================
@@ -1934,7 +1932,8 @@ async fn wave5_pg_smoke() {
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["items"], json!([]));
-    // Transcribe still proxied on Postgres too.
+    // Transcribe is a sidecar-contract route on Postgres too:
+    // SIDECAR_URL unset → 503 voice_stt_unavailable.
     let (ct, body_bytes) = multipart_audio();
     let (status, resp) = env
         .call(authed(
@@ -1942,5 +1941,6 @@ async fn wave5_pg_smoke() {
             &token,
         ))
         .await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY, "{resp}");
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{resp}");
+    assert_eq!(err_code(&resp), "voice_stt_unavailable");
 }
