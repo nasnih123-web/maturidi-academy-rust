@@ -34,12 +34,14 @@ Notes pinned by the cases:
 - `POST /api/v1/quran/hifz/attempts/{id}/grade`,
   `grade-word`, `voice-search`, and test `answer` are intentionally NOT
   native (ADR-031: no ASR engine is embedded in the Rust binary; ASR
-  quality must never be faked) — they fall through to the proxy, so
-  with a dead origin they answer 502 `bad_gateway`.
-- The live WebSocket stream (`GET .../attempts/{id}/stream`) cannot be
-  relayed by the HTTP proxy, so the route is registered explicitly as
-  503 `hifz_live_unavailable` until a WS relay exists (Wave 8
-  candidate).
+  quality must never be faked) — in Wave 4 they fell through to the
+  proxy, so with a dead origin they answered 502 `bad_gateway`. Since
+  Wave 8 they are sidecar-contract routes (ADR-134): explicit
+  forwarding to `SIDECAR_URL`, honest 503 `hifz_asr_unavailable`
+  when it is unset/unreachable.
+- The live WebSocket stream (`GET .../attempts/{id}/stream`) is
+  registered explicitly as 503 `hifz_live_unavailable` (no sidecar
+  route covers it; use the Python sidecar directly).
 - `GET /api/v1/quran/hifz/status` honestly reports the selected engine
   as unavailable (`available: false`) for the same reason.
 - Test-passage sampling uses SplitMix64, not CPython's Mersenne
