@@ -1744,7 +1744,7 @@ async fn voice_tts_audio_by_ref() {
     );
 }
 
-// ============================ voice: transcribe/ask proxied ===========================
+// ============================ voice: transcribe/ask sidecar-contract (ADR-134) ===========================
 
 fn multipart_audio() -> (String, Vec<u8>) {
     let boundary = "----wave5testboundary";
