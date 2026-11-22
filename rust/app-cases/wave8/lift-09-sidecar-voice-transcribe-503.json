@@ -1,0 +1,1 @@
+{"auth":"bearer","body":null,"case":"lift.voice transcribe with SIDECAR_URL unset is 503","expected":{"error":{"code":"voice_stt_unavailable"}},"expected_status":503,"method":"POST","path":"/api/v1/voice/transcribe"}

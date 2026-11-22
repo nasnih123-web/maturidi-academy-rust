@@ -1,0 +1,1 @@
+{"auth":"bearer","body":{"question":"What is zakat?"},"case":"lift.fatwa ask with SIDECAR_URL unset is 503","expected":{"error":{"code":"fatwa_ask_unavailable"}},"expected_status":503,"method":"POST","path":"/api/v1/fatwa/ask"}

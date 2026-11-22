@@ -1,0 +1,13 @@
+{
+  "auth": "projects.manage",
+  "body": null,
+  "case": "tasks.by-entity without related_entity_id (422 validation_error)",
+  "expected": {
+    "error": {
+      "code": "validation_error"
+    }
+  },
+  "expected_status": 422,
+  "method": "GET",
+  "path": "/api/v1/projects/tasks/by-entity?related_entity_type=library_item"
+}

@@ -1,0 +1,20 @@
+{
+  "auth": "projects.manage",
+  "body": {
+    "assignee_id": "00000000-0000-0000-0000-000000000000",
+    "title": {
+      "ar": "مشروع تجريبي",
+      "en": "Test project",
+      "fa": "پروژه تست"
+    }
+  },
+  "case": "tasks.create with an unknown assignee (404 assignee_not_found)",
+  "expected": {
+    "error": {
+      "code": "assignee_not_found"
+    }
+  },
+  "expected_status": 404,
+  "method": "POST",
+  "path": "/api/v1/projects/00000000-0000-0000-0000-000000000000/tasks"
+}

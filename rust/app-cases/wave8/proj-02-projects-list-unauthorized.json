@@ -1,0 +1,13 @@
+{
+  "auth": "none",
+  "body": null,
+  "case": "projects.list without token (401 unauthorized)",
+  "expected": {
+    "error": {
+      "code": "unauthorized"
+    }
+  },
+  "expected_status": 401,
+  "method": "GET",
+  "path": "/api/v1/projects"
+}

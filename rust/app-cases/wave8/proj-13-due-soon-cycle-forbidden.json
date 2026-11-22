@@ -1,0 +1,13 @@
+{
+  "auth": "user",
+  "body": null,
+  "case": "admin.projects.due-soon-cycle as a staff reader without the permission (403 forbidden)",
+  "expected": {
+    "error": {
+      "code": "forbidden"
+    }
+  },
+  "expected_status": 403,
+  "method": "POST",
+  "path": "/api/v1/admin/projects/due-soon-cycle"
+}

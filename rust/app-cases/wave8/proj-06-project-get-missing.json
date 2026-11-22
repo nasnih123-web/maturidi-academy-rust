@@ -1,0 +1,13 @@
+{
+  "auth": "projects.manage",
+  "body": null,
+  "case": "projects.get for an unknown id (404 project_not_found)",
+  "expected": {
+    "error": {
+      "code": "project_not_found"
+    }
+  },
+  "expected_status": 404,
+  "method": "GET",
+  "path": "/api/v1/projects/00000000-0000-0000-0000-000000000000"
+}

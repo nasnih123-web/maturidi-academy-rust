@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"lift.ws events without auth closes 4401 (101 handshake, then close frame)","expected":{"close_code":4401},"expected_status":101,"method":"GET","path":"/ws/events"}

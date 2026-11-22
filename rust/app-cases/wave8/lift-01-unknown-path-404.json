@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"lift.unknown path is a native 404 in Python's error envelope","expected":{"error":{"code":"http_error","message":"Not Found"}},"expected_status":404,"method":"GET","path":"/no/such/route"}

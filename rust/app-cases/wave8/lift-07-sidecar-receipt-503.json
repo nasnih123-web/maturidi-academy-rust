@@ -1,0 +1,1 @@
+{"auth":"bearer","body":null,"case":"lift.receipt PDF with SIDECAR_URL unset is 503","expected":{"error":{"code":"receipt_pdf_unavailable"}},"expected_status":503,"method":"GET","path":"/api/v1/finance/receipts/00000000-0000-0000-0000-000000000000"}

@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"lift.static miss is a 404","expected":{"error":{"code":"http_error","message":"Not Found"}},"expected_status":404,"method":"GET","path":"/static/fonts/fa/does-not-exist.woff2"}

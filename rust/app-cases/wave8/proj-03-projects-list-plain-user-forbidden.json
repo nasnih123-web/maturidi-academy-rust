@@ -1,0 +1,13 @@
+{
+  "auth": "user",
+  "body": null,
+  "case": "projects.list as a plain authenticated user (403 forbidden, staff-only)",
+  "expected": {
+    "error": {
+      "code": "forbidden"
+    }
+  },
+  "expected_status": 403,
+  "method": "GET",
+  "path": "/api/v1/projects"
+}

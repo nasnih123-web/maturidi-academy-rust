@@ -1,0 +1,25 @@
+{
+  "auth": "projects.manage",
+  "body": {
+    "department": {
+      "ar": "مشروع تجريبي",
+      "en": "Test project",
+      "fa": "پروژه تست"
+    },
+    "title": {
+      "ar": "مشروع تجريبي",
+      "en": "Test project",
+      "fa": "پروژه تست"
+    },
+    "user_id": "00000000-0000-0000-0000-000000000000"
+  },
+  "case": "staff.create for an unknown user (404 user_not_found)",
+  "expected": {
+    "error": {
+      "code": "user_not_found"
+    }
+  },
+  "expected_status": 404,
+  "method": "POST",
+  "path": "/api/v1/staff"
+}

@@ -1,0 +1,20 @@
+{
+  "auth": "projects.manage",
+  "body": {
+    "status": "bogus",
+    "title": {
+      "ar": "مشروع تجريبي",
+      "en": "Test project",
+      "fa": "پروژه تست"
+    }
+  },
+  "case": "projects.create with an unknown status (422 validation_error)",
+  "expected": {
+    "error": {
+      "code": "validation_error"
+    }
+  },
+  "expected_status": 422,
+  "method": "POST",
+  "path": "/api/v1/projects"
+}

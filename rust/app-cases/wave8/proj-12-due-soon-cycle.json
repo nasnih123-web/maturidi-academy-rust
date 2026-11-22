@@ -1,0 +1,12 @@
+{
+  "auth": "projects.manage",
+  "body": null,
+  "case": "admin.projects.due-soon-cycle (projects.manage: 200, scanned/notified counts)",
+  "expected": {
+    "notified": "candidates with at least one delivered channel",
+    "scanned": "number of due candidates"
+  },
+  "expected_status": 200,
+  "method": "POST",
+  "path": "/api/v1/admin/projects/due-soon-cycle"
+}

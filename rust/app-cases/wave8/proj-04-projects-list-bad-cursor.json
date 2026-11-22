@@ -1,0 +1,13 @@
+{
+  "auth": "projects.manage",
+  "body": null,
+  "case": "projects.list with a malformed cursor (400 bad_cursor)",
+  "expected": {
+    "error": {
+      "code": "bad_cursor"
+    }
+  },
+  "expected_status": 400,
+  "method": "GET",
+  "path": "/api/v1/projects?cursor=!!!"
+}

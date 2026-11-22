@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"lift.themes stay native with RUST_ANYTHING_UNIT_META=original (kill switch retired, env set outside the case)","expected":{},"expected_status":200,"method":"GET","path":"/api/v1/themes/active"}

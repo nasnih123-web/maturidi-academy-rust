@@ -1,0 +1,1 @@
+{"auth":"bearer","body":{"surah":1,"ayah":1},"case":"lift.hifz grade with SIDECAR_URL unset is 503","expected":{"error":{"code":"hifz_asr_unavailable"}},"expected_status":503,"method":"POST","path":"/api/v1/quran/hifz/attempts/00000000-0000-0000-0000-000000000000/grade"}

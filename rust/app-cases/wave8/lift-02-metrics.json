@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"lift.metrics serves native Prometheus exposition","expected":{"content_type":"text/plain; version=0.0.4","help_lines":["http_requests_total","http_request_duration_ms_avg","process_uptime_seconds","outbox_pending_events","outbox_oldest_pending_age_seconds","outbox_dead_letter_events"]},"expected_status":200,"method":"GET","path":"/metrics"}

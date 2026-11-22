@@ -1,0 +1,22 @@
+{
+  "auth": "projects.manage",
+  "body": {
+    "status": "review"
+  },
+  "case": "tasks.move backlog to review (422 invalid_status_transition, allowed [todo])",
+  "expected": {
+    "error": {
+      "code": "invalid_status_transition",
+      "details": {
+        "allowed": [
+          "todo"
+        ],
+        "from": "backlog",
+        "to": "review"
+      }
+    }
+  },
+  "expected_status": 422,
+  "method": "POST",
+  "path": "/api/v1/projects/tasks/00000000-0000-0000-0000-000000000000/move"
+}

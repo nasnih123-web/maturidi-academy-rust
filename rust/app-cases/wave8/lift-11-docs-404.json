@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"lift.docs is dev-only in Python so it 404s","expected":{"error":{"code":"http_error","message":"Not Found"}},"expected_status":404,"method":"GET","path":"/docs"}
