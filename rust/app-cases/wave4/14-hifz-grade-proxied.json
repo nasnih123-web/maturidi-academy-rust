@@ -1,5 +1,5 @@
 {
-  "case": "hifz.grade stays proxied (no ASR in the Rust binary)",
+  "case": "hifz.grade is a sidecar-contract route (no ASR in the Rust binary)",
   "auth": "bearer",
   "method": "POST",
   "path": "/api/v1/quran/hifz/attempts/<uuid>/grade",
@@ -7,8 +7,10 @@
     "surah": 1,
     "ayah": 1
   },
-  "expected_status": 502,
+  "expected_status": 503,
   "expected": {
-    "status": "bad_gateway"
+    "error": {
+      "code": "hifz_asr_unavailable"
+    }
   }
 }
