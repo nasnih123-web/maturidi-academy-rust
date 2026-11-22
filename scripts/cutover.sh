@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cutover.sh — Wave 8 cutover preflight for the Maturidi Academy Rust API.
+# cutover.sh — Wave 9 cutover preflight for the Maturidi Academy Rust API.
 #
 # What this is:
 #   A READ-ONLY preflight check for deploying the Rust binary
@@ -24,7 +24,7 @@
 #     loudly if it is not.
 #   - It does NOT touch the live project. Step 0 refuses to run when
 #     any live-project marker is present (live domains in APP_BASE_URL /
-#     ORIGIN_URL / DATABASE_URL, or a matching RAILWAY_PROJECT_ID).
+#     SIDECAR_URL / DATABASE_URL, or a matching RAILWAY_PROJECT_ID).
 #     It also refuses to run until the operator sets
 #     CUTOVER_ACK_NEW_PROJECT=yes, confirming the target is the NEW
 #     Railway project.
@@ -44,10 +44,11 @@
 #   2  DEGRADED — hard checks passed, but at least one sidecar /
 #                provider is DOWN. The Rust API can still start: the
 #                affected features answer honestly per their ADRs
-#                (502 bad_gateway via the proxy, 503, or enqueued:false)
-#                instead of faking success. Read the table, decide
-#                whether the degraded features are acceptable, then
-#                start the service deliberately — not by accident.
+#                (503 with a route-specific sidecar code, or
+#                enqueued:false) instead of faking success. Read the
+#                table, decide whether the degraded features are
+#                acceptable, then start the service deliberately —
+#                not by accident.
 #   1  NO-GO    — a hard blocker: live-project guard tripped, required
 #                env var missing / placeholder secret, Postgres down,
 #                schema missing, or a required tool missing.
@@ -71,20 +72,25 @@
 #     (AlQuran Cloud base URL), rust/app/src/routes_calculators.rs +
 #     routes_widgets.rs (NISAB_PRICE_URL).
 #   - ADRs: rust/DECISIONS.md — ADR-004 (new Railway only), ADR-013
-#     (proxy 502), ADR-015 (local storage only), ADR-019 (hash
-#     embeddings), ADR-026 (fatwa ask proxied), ADR-031 (ASR proxied),
-#     ADR-045 (subtitles sidecar), ADR-046 (STT proxied), ADR-051
-#     (scanner), ADR-053 (library media sidecar), ADR-061 (certificate
-#     PDF sidecar), ADR-078 (ZarinPal/IDPay live), ADR-114/115/116
-#     (telegram), ADR-125 (ARQ/dispatcher stays Python), ADR-126
-#     (/ws/events), ADR-127 (/metrics), ADR-128 (/api/v1/health).
+#     (old proxy 502 — historical; the proxy is gone since ADR-133),
+#     ADR-015 (local storage only), ADR-019 (hash embeddings),
+#     ADR-026/031/046/076 (superseded by ADR-134: sidecar contract),
+#     ADR-045 (subtitles sidecar), ADR-051 (scanner), ADR-053
+#     (library media sidecar), ADR-061 (certificate PDF sidecar),
+#     ADR-078 (ZarinPal/IDPay live), ADR-114/115/116 (telegram),
+#     ADR-125 (ARQ/dispatcher stays Python), ADR-133 (proxy removed;
+#     ORIGIN_URL deleted), ADR-134 (sidecar contract, SIDECAR_URL),
+#     ADR-135 (/ws/events native), ADR-136 (/metrics native),
+#     ADR-137 (/api/v1/health native), ADR-148 (Wave 9 PR-1
+#     reconciliation corrections).
 #   - Bundled data: rust/app/src/{adhan,hifz_logic,quran_providers,
 #     routes_quran}.rs `include_str!("../data/quran/...")` — the files
 #     are compiled INTO the binary, so this step validates the source
 #     tree the binary was built from.
-#   - Schema: original repo apps/api/alembic (50 revisions, head
-#     f2a3b4c5d6e7); extensions `vector` + `pg_trgm` from
-#     alembic/versions/e2b3c4d5f6a7_audit_b03_pgvector.py.
+#   - Schema: original repo apps/api/alembic (50 revisions, one
+#     linear chain, head f2a3b4c5d6e7 — re-verified 2026-11-22 on the
+#     locked rust-base checkout, ADR-148); extensions `vector` +
+#     `pg_trgm` from alembic/versions/e2b3c4d5f6a7_audit_b03_pgvector.py.
 #
 set -euo pipefail
 
@@ -158,7 +164,7 @@ if [ -n "$ENV_FILE" ]; then
 fi
 
 say "=================================================================="
-say "Maturidi Academy (Rust) — Wave 8 cutover preflight"
+say "Maturidi Academy (Rust) — Wave 9 cutover preflight"
 say "Repo: $REPO_ROOT"
 if [ "$DRY_RUN" -eq 1 ]; then
     say "Mode: --dry-run (prints the plan only; contacts nothing)"
@@ -170,7 +176,7 @@ say ""
 say "Step 0 — Live-project guard (refuses to run against the live project)"
 if [ "$DRY_RUN" -eq 1 ]; then
     say "  [dry-run] Would check: CUTOVER_ACK_NEW_PROJECT=yes is set;"
-    say "  [dry-run] Would refuse if APP_BASE_URL / ORIGIN_URL / DATABASE_URL"
+    say "  [dry-run] Would refuse if APP_BASE_URL / SIDECAR_URL / DATABASE_URL"
     say "            contain a live domain (api.matoridi.ir, academy.matoridi.ir,"
     say "            academy.hosseinnasanih.ir), or if RAILWAY_PROJECT_ID matches"
     say "            LIVE_RAILWAY_PROJECT_ID, or RAILWAY_ENVIRONMENT matches"
@@ -186,7 +192,7 @@ else
     # live API; academy.matoridi.ir is the live web. academy.hosseinnasanih.ir
     # was REMOVED at the user's order but is still a live-project marker.
     LIVE_DOMAINS="api.matoridi.ir academy.matoridi.ir academy.hosseinnasanih.ir"
-    for var in APP_BASE_URL ORIGIN_URL DATABASE_URL REDIS_URL; do
+    for var in APP_BASE_URL SIDECAR_URL DATABASE_URL REDIS_URL; do
         val="${!var:-}"
         [ -n "$val" ] || continue
         for dom in $LIVE_DOMAINS; do
@@ -230,16 +236,22 @@ if [ "$DRY_RUN" -eq 1 ]; then
     say "  [dry-run] Would check presence/format (never values) of:"
     say "  [dry-run]   REQUIRED: DATABASE_URL, JWT_SECRET, ENCRYPTION_KEY,"
     say "  [dry-run]     STORAGE_SIGNING_SECRET, APP_ENV=production, APP_BASE_URL"
-    say "  [dry-run]     (new public API origin), REDIS_URL (new Redis), ORIGIN_URL"
-    say "  [dry-run]     (NEW Python sidecar origin, never the live API), PORT,"
+    say "  [dry-run]     (new public API origin), REDIS_URL (new Redis), SIDECAR_URL"
+    say "  [dry-run]     (NEW Python sidecar service, never the live API; optional —"
+    say "  [dry-run]     unset means the 8 sidecar routes answer 503, ADR-134), PORT,"
     say "  [dry-run]     STORAGE_PROVIDER=local, STORAGE_LOCAL_DIR."
     say "  [dry-run]   CONDITIONAL: TURNSTILE_SECRET_KEY (if CAPTCHA_ENABLED != false),"
     say "  [dry-run]     GITHUB_DISPATCH_TOKEN + GITHUB_REPO (only for /admin/builds/rebuild),"
     say "  [dry-run]     BUILDS_SERVICE_TOKEN (only for the build-release callback)."
-    say "  [dry-run]   OPTIONAL: NISAB_PRICE_URL, ENCRYPTION_KEYS, TRUSTED_PROXIES,"
+    say "  [dry-run]   OPTIONAL: RUST_API_URL (probe a running Rust binary in Step 7;"
+    say "  [dry-run]     when unset, Step 7 is skipped), NISAB_PRICE_URL, ENCRYPTION_KEYS,"
+    say "  [dry-run]     TRUSTED_PROXIES,"
     say "  [dry-run]     TURNSTILE_SITE_KEY, ACCESS_TOKEN_EXPIRE_MINUTES, ENCRYPTION_KEY_VERSION."
     say "  [dry-run]   Would also warn: RESEND_API_KEY / SMTP_* / SMS_* / SENTRY_DSN /"
-    say "  [dry-run]     CORS_ALLOW_ORIGINS are NOT read by the Rust binary (see README §5)."
+    say "  [dry-run]     OTEL_EXPORTER_OTLP_ENDPOINT / CLAMAV_* / S3_* are NOT read by the"
+    say "  [dry-run]     Rust binary (see README §5). CORS_ALLOW_ORIGINS IS read — but only"
+    say "  [dry-run]     for the /ws/events Origin check (ADR-135); the widget CORS"
+    say "  [dry-run]     wildcard is still deploy-layer (ADR-121)."
 else
     # --- hard requirements (no usable default in the Rust binary) ---
     if is_unset "${DATABASE_URL:-}"; then
@@ -283,13 +295,17 @@ else
     else
         ok "REDIS_URL is set ($(redact_url "$REDIS_URL"))"
     fi
-    if is_unset "${ORIGIN_URL:-}"; then
-        warn "ORIGIN_URL is not set (default http://127.0.0.1:8000). Every proxied route (fatwa/ask, ASR, STT, receipt PDF, /api/v1/health, /metrics) will 502 until the NEW Python sidecar origin is set. Set ORIGIN_URL to the new sidecar service, never the live API."
-        DEGRADED_COUNT=$((DEGRADED_COUNT + 1)); DEGRADED_ITEMS+=("ORIGIN_URL unset — all proxied routes (fatwa/ask, hifz ASR, voice STT, receipt PDF, /api/v1/health, /metrics) will 502")
+    # SIDECAR_URL is OPTIONAL (no default in the Rust binary): unset means
+    # the 8 sidecar-contract routes answer honest 503s with route-specific
+    # codes (ADR-134) — the API still starts. Set it to the NEW Python
+    # sidecar service URL, never the live API.
+    if is_unset "${SIDECAR_URL:-}"; then
+        warn "SIDECAR_URL is not set. The 8 sidecar routes (fatwa/ask, hifz ASR grade/grade-word/voice-search/test-answer, voice transcribe/ask, receipt PDF) answer 503 with their route-specific codes until the NEW Python sidecar service is set. Set SIDECAR_URL to the new sidecar service, never the live API."
+        DEGRADED_COUNT=$((DEGRADED_COUNT + 1)); DEGRADED_ITEMS+=("SIDECAR_URL unset — the 8 sidecar routes answer 503 (ADR-134)")
     else
-        case "$ORIGIN_URL" in
-            http://127.0.0.1*|http://localhost*) warn "ORIGIN_URL is localhost ($ORIGIN_URL) — correct only if the Python sidecar runs on the same host; on Railway it must be the sidecar service URL" ;;
-            *) ok "ORIGIN_URL is set (Python sidecar origin)" ;;
+        case "$SIDECAR_URL" in
+            http://127.0.0.1*|http://localhost*) warn "SIDECAR_URL is localhost ($SIDECAR_URL) — correct only if the Python sidecar runs on the same host; on Railway it must be the sidecar service URL" ;;
+            *) ok "SIDECAR_URL is set (Python sidecar service)" ;;
         esac
     fi
     # --- values with defaults that must still be right ---
@@ -329,7 +345,9 @@ else
     fi
     if [ -n "${TRUSTED_PROXIES:-}" ]; then info "TRUSTED_PROXIES is set — verify it lists only the Railway proxy"; fi
     # --- vars operators expect to matter but the Rust binary does NOT read ---
-    for v in RESEND_API_KEY SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASSWORD SMTP_FROM SMS_PROVIDER SMS_API_KEY SENTRY_DSN OTEL_EXPORTER_OTLP_ENDPOINT CORS_ALLOW_ORIGINS CLAMAV_HOST S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION; do
+    # (CORS_ALLOW_ORIGINS is NOT in this list: it IS read, for the /ws/events
+    # Origin check — ADR-135/ADR-148. Only the widget wildcard is deploy-layer.)
+    for v in RESEND_API_KEY SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASSWORD SMTP_FROM SMS_PROVIDER SMS_API_KEY SENTRY_DSN OTEL_EXPORTER_OTLP_ENDPOINT CLAMAV_HOST S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION; do
         if [ -n "${!v:-}" ]; then
             warn "$v is set but the Rust binary does NOT read it (see README §5). Do not assume it takes effect."
         fi
@@ -347,7 +365,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     say "  [dry-run] Would run (read-only): psql SELECT 1; SELECT version();"
     say "            pg_extension check for vector + pg_trgm;"
     say "            alembic_version check (expect f2a3b4c5d6e7);"
-    say "            information_schema check for ~25 core tables;"
+    say "            information_schema check for ~30 core tables;"
     say "            domain_events outbox counts (pending / dead-letter)."
     say "  [dry-run] Would also PING Redis (redis-cli, or a python3 RESP PING"
     say "            fallback) — Redis DOWN is a NO-GO for production cutover"
@@ -447,9 +465,9 @@ else
             hard "alembic_version = $ALEM_VERSION, expected f2a3b4c5d6e7 — the schema is at a different revision. Run 'alembic upgrade head' from the rust-base checkout (or re-check the head if the base moved)."
         fi
         # Core tables the Rust binary reads/writes (subset of TEST_SCHEMA's
-        # 116 tables — one per module family, enough to catch a missing/partial
-        # schema; a full 116-table diff belongs in CI, not in this script).
-        CORE_TABLES="users sessions refresh_tokens platform_settings domain_events audit_logs roles permissions api_keys home_sections articles article_categories fatwa_topics fiqh_knowledge_chunks ingestion_runs library_items item_subtitles courses lessons certificates payment_intents donations hifz_attempts hifz_tests social_posts sync_changelog telegram_published religious_places user_devices notifications"
+        # 119 tables — one per module family, enough to catch a missing/partial
+        # schema; a full 119-table diff belongs in CI, not in this script).
+        CORE_TABLES="users sessions refresh_tokens platform_settings domain_events audit_logs roles permissions api_keys home_sections articles article_categories fiqh_topics fiqh_knowledge_chunks ingestion_runs library_items item_subtitles courses lessons certificates payment_intents donations hifz_attempts hifz_tests social_posts sync_changelog telegram_published religious_places user_devices notifications"
         MISSING=""
         for t in $CORE_TABLES; do
             EXISTS="$(psql "$DATABASE_URL" -tA -c "SELECT to_regclass('public.$t')" 2>/dev/null || true)"
@@ -533,8 +551,9 @@ fi
 say ""
 say "Step 6 — Sidecars and external providers (UP/DOWN table)"
 say "  A DOWN row does NOT stop the Rust API from starting — the feature"
-say "  answers honestly per its ADR (502/503/enqueued:false). It DOES"
-say "  decide whether cutover with that feature degraded is acceptable."
+say "  answers honestly per its ADR (503 with a route-specific sidecar"
+say "  code, or enqueued:false). It DOES decide whether cutover with"
+say "  that feature degraded is acceptable."
 say ""
 printf '  %-18s %-42s %-6s %s\n' "SIDECAR" "SERVES" "STATE" "NOTE"
 printf '  %-18s %-42s %-6s %s\n' "------------------" "------------------------------------------" "------" "----"
@@ -563,9 +582,13 @@ sidecar_row() { # $1=name $2=serves $3=state $4=note
 
 if [ "$DRY_RUN" -eq 1 ]; then
     say "  [dry-run] Would probe (HTTP GET, 10s timeout, no auth):"
-    say "  [dry-run]   python-origin:  GET \$ORIGIN_URL/health (expect 200) — serves fatwa/ask,"
-    say "  [dry-run]                   hifz ASR grade, voice transcribe/ask, receipt PDF,"
-    say "  [dry-run]                   /api/v1/health, /metrics (ADRs 026/031/046/076/127/128)."
+    say "  [dry-run]   python-sidecar: GET \$SIDECAR_URL/health (expect 200) — the sidecar"
+    say "  [dry-run]                   serves exactly the 8 sidecar-contract routes:"
+    say "  [dry-run]                   fatwa/ask, hifz ASR grade/grade-word/voice-search/"
+    say "  [dry-run]                   test-answer, voice transcribe/ask, receipt PDF"
+    say "  [dry-run]                   (ADR-134; unset/unreachable sidecar -> honest 503s)."
+    say "  [dry-run]                   /api/v1/health and /metrics are NATIVE on the Rust"
+    say "  [dry-run]                   binary now (ADR-136/137) and are probed in Step 7."
     say "  [dry-run]   alquran-cloud:  GET https://api.alquran.cloud/v1/surah/1 (expect 200)."
     say "  [dry-run]   zarinpal:       https://api.zarinpal.com (any HTTP response = reachable)."
     say "  [dry-run]   idpay:          https://api.idpay.ir (any HTTP response = reachable)."
@@ -578,18 +601,21 @@ if [ "$DRY_RUN" -eq 1 ]; then
     say "  [dry-run]   resend-api:     https://api.resend.com (any HTTP response; informational —"
     say "  [dry-run]                   the Rust mailer is a stub regardless, ADR-015)."
     say "  [dry-run]   ARQ workers (critical/ai/media/telegram/notifications/analytics),"
-    say "  [dry-run]   the dispatcher, subtitle worker, certificate renderer and media"
-    say "  [dry-run]   pipeline have NO HTTP endpoint: they are checked via the DB queue"
-    say "  [dry-run]   counts in Step 4 + the Railway dashboard/services list (see README §6)."
-    say "  [dry-run]   /ws/events (ADR-126) cannot be probed with curl — manual check (README §7)."
+    say "  [dry-run]   the subtitle worker, certificate renderer and media pipeline"
+    say "  [dry-run]   have NO HTTP endpoint: they are checked via the DB queue counts"
+    say "  [dry-run]   in Step 4 + the Railway dashboard/services list (see README §6)."
+    say "  [dry-run]   The dispatcher runs INSIDE the Python sidecar API process"
+    say "  [dry-run]   (ADR-125), not as a separate service."
+    say "  [dry-run]   /ws/events is native on the Rust binary (ADR-135) and cannot be"
+    say "  [dry-run]   probed with curl — manual check with a real WS client (README §7)."
 else
-    # --- Python origin (the sidecar host for every proxied route) ---
-    if is_unset "${ORIGIN_URL:-}"; then
-        sidecar_row "python-origin" "fatwa/ask, ASR, STT, receipt PDF, /api/v1/health, /metrics" "DOWN" "ORIGIN_URL unset — all proxied routes 502 (ADRs 026/031/046/076/127/128)"
-    elif http_probe "${ORIGIN_URL%/}/health" "200"; then
-        sidecar_row "python-origin" "fatwa/ask, ASR, STT, receipt PDF, /api/v1/health, /metrics" "UP" "GET /health -> 200 (proxied routes served by the Python origin)"
+    # --- Python sidecar (serves exactly the 8 sidecar-contract routes) ---
+    if is_unset "${SIDECAR_URL:-}"; then
+        sidecar_row "python-sidecar" "8 sidecar routes only (ADR-134)" "DOWN" "SIDECAR_URL unset — the 8 sidecar routes answer 503 with route-specific codes (ADR-134)"
+    elif http_probe "${SIDECAR_URL%/}/health" "200"; then
+        sidecar_row "python-sidecar" "8 sidecar routes only (ADR-134)" "UP" "GET /health -> 200 (fatwa/ask, hifz ASR, voice STT, receipt PDF served by the sidecar)"
     else
-        sidecar_row "python-origin" "fatwa/ask, ASR, STT, receipt PDF, /api/v1/health, /metrics" "DOWN" "GET /health -> ${PROBE_CODE:-000} (ADRs 026/031/046/076/127/128 degraded: ask/ASR/STT/receipt-PDF answer 502)"
+        sidecar_row "python-sidecar" "8 sidecar routes only (ADR-134)" "DOWN" "GET /health -> ${PROBE_CODE:-000} (ADR-134 degraded: the 8 sidecar routes answer 503)"
     fi
     # --- External providers (reachability only; no auth, no payment) ---
     if http_probe "https://api.alquran.cloud/v1/surah/1" "200"; then
@@ -641,8 +667,11 @@ else
     say ""
     say "  Workers with NO HTTP endpoint (verify in the Railway dashboard / service logs —"
     say "  see README §6). DB queue counts from Step 4 are the only in-script signal:"
-    say "    - dispatcher (ADR-125): consumes domain_events outbox; check the service is"
-    say "      running and the pending count in Step 4 is draining."
+    say "    - dispatcher (ADR-125): runs INSIDE the Python sidecar API process"
+    say "      (lifespan task); it consumes domain_events outbox rows. Check the"
+    say "      sidecar service is running and the pending count in Step 4 is draining."
+    say "      (The Rust binary's own WS poller only READS domain_events for its"
+    say "      native /ws/events clients; it never marks rows processed.)"
     say "    - worker-ai (ADR-022/103): consumes ingestion_runs queued rows."
     say "    - worker-media (ADR-045/053): consumes item_subtitles pending + library"
     say "      transcript/OCR pending rows (faster-whisper + ffmpeg + tesseract)."
@@ -651,8 +680,101 @@ else
     say "    - worker-telegram / worker-notifications / worker-analytics (ADR-116/125):"
     say "      consume their ARQ queues; nothing in the DB proves they are running —"
     say "      check Railway service status + logs."
-    say "    - /ws/events (ADR-126) cannot be probed with curl: open a real WS client"
-    say "      against the Python origin with a ws-ticket (see README §7)."
+    say "    - /ws/events (ADR-135, native on the Rust binary) cannot be probed with"
+    say "      curl: open a real WS client against RUST_API_URL with a ws-ticket"
+    say "      (POST /api/v1/auth/ws-ticket) — see README §7."
+fi
+
+# ==================================================== Step 7: Rust API live endpoints
+# Probes the RUNNING Rust binary — only when RUST_API_URL is set (e.g.
+# a local build, or the new Railway service URL after deploy). When it
+# is unset this step is skipped with an info line: the preflight is
+# still meaningful (env/DB/Redis/schema/sidecars), it just cannot prove
+# the binary answers. Every failure here is a HARD failure: if the
+# binary is up and answers wrong, the deploy is broken, not degraded.
+say ""
+say "Step 7 — Rust API live endpoints (only when RUST_API_URL is set)"
+if [ "$DRY_RUN" -eq 1 ]; then
+    say "  [dry-run] Would probe, when RUST_API_URL is set (else skip):"
+    say "  [dry-run]   GET \$RUST_API_URL/health -> 200 {status: ok}"
+    say "  [dry-run]   GET \$RUST_API_URL/ready -> 200 {status: ready, db: ok}"
+    say "  [dry-run]   GET \$RUST_API_URL/api/v1/health -> 200, media_tools.ready false"
+    say "  [dry-run]   GET \$RUST_API_URL/metrics -> 200 text/plain, has http_requests_total"
+    say "  [dry-run]   GET \$RUST_API_URL/openapi.json -> 200, has 471 route+method combos"
+    say "  [dry-run]   GET \$RUST_API_URL/static/__cutover_probe__ -> 404"
+    say "  [dry-run]   GET \$RUST_API_URL/docs -> 404 (dev-only in Python too)"
+    say "  [dry-run]   GET \$RUST_API_URL/__cutover_unknown_path__ -> 404 http_error envelope"
+    say "  [dry-run]   /ws/events cannot be probed with curl — manual WS check (README §7)."
+elif is_unset "${RUST_API_URL:-}"; then
+    info "RUST_API_URL is not set — skipping the live-endpoint probe. Set it to a running Rust binary (local build or the new service URL) to prove the binary answers."
+else
+    if ! command -v curl >/dev/null 2>&1; then
+        hard "curl is not installed — cannot probe RUST_API_URL"
+    else
+        API="${RUST_API_URL%/}"
+        # --- /health ---
+        if [ "$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$API/health" 2>/dev/null || echo 000)" = "200" ]; then
+            if curl --max-time 10 -s "$API/health" 2>/dev/null | grep -q '"status"[[:space:]]*:[[:space:]]*"ok"'; then
+                ok "GET /health -> 200 {status: ok}"
+            else
+                hard "GET /health -> 200 but the body is not {status: ok}"
+            fi
+        else
+            hard "GET /health did not answer 200 — is the Rust binary running at $API ?"
+        fi
+        # --- /ready ---
+        READY_BODY="$(curl --max-time 10 -s "$API/ready" 2>/dev/null || true)"
+        READY_CODE="$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$API/ready" 2>/dev/null || echo 000)"
+        if [ "$READY_CODE" = "200" ] && printf '%s' "$READY_BODY" | grep -q '"status"[[:space:]]*:[[:space:]]*"ready"'; then
+            ok "GET /ready -> 200 {status: ready}"
+        else
+            hard "GET /ready -> ${READY_CODE:-000} (expected 200 {status: ready}) — check the DB the binary points at"
+        fi
+        # --- /api/v1/health (native, media_tools honestly all-unavailable) ---
+        HEALTH1_BODY="$(curl --max-time 10 -s "$API/api/v1/health" 2>/dev/null || true)"
+        HEALTH1_CODE="$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$API/api/v1/health" 2>/dev/null || echo 000)"
+        if [ "$HEALTH1_CODE" = "200" ] && printf '%s' "$HEALTH1_BODY" | grep -q '"ready"[[:space:]]*:[[:space:]]*false'; then
+            ok "GET /api/v1/health -> 200, media_tools.ready false (ADR-137)"
+        else
+            hard "GET /api/v1/health -> ${HEALTH1_CODE:-000} (expected 200 with media_tools.ready false)"
+        fi
+        # --- /metrics (native Prometheus exposition) ---
+        METRICS_BODY="$(curl --max-time 10 -s "$API/metrics" 2>/dev/null || true)"
+        METRICS_CODE="$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$API/metrics" 2>/dev/null || echo 000)"
+        if [ "$METRICS_CODE" = "200" ] && printf '%s' "$METRICS_BODY" | grep -q "http_requests_total"; then
+            ok "GET /metrics -> 200, Prometheus exposition present (ADR-136)"
+        else
+            hard "GET /metrics -> ${METRICS_CODE:-000} (expected 200 with http_requests_total)"
+        fi
+        # --- /openapi.json (generated from the live router: 471 combos) ---
+        OPENAPI_BODY="$(curl --max-time 10 -s "$API/openapi.json" 2>/dev/null || true)"
+        OPENAPI_CODE="$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$API/openapi.json" 2>/dev/null || echo 000)"
+        if [ "$OPENAPI_CODE" = "200" ] && printf '%s' "$OPENAPI_BODY" | grep -q '"/api/v1/fatwa/ask"'; then
+            ok "GET /openapi.json -> 200, lists the registered routes incl. /api/v1/fatwa/ask (ADR-139)"
+        else
+            hard "GET /openapi.json -> ${OPENAPI_CODE:-000} (expected 200 with the registered routes)"
+        fi
+        # --- /static missing file -> 404 ---
+        if [ "$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$API/static/__cutover_probe__.woff2" 2>/dev/null || echo 000)" = "404" ]; then
+            ok "GET /static/__cutover_probe__.woff2 -> 404 (ADR-140)"
+        else
+            hard "GET /static/__cutover_probe__.woff2 did not answer 404"
+        fi
+        # --- /docs -> 404 (dev-only, like production Python) ---
+        if [ "$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$API/docs" 2>/dev/null || echo 000)" = "404" ]; then
+            ok "GET /docs -> 404 (dev-only, ADR-139)"
+        else
+            hard "GET /docs did not answer 404"
+        fi
+        # --- unknown path -> 404 in Python's http_error envelope ---
+        UNKNOWN_BODY="$(curl --max-time 10 -s "$API/__cutover_unknown_path__" 2>/dev/null || true)"
+        UNKNOWN_CODE="$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$API/__cutover_unknown_path__" 2>/dev/null || echo 000)"
+        if [ "$UNKNOWN_CODE" = "404" ] && printf '%s' "$UNKNOWN_BODY" | grep -q '"code"[[:space:]]*:[[:space:]]*"http_error"'; then
+            ok "GET /__cutover_unknown_path__ -> 404 http_error envelope (ADR-133)"
+        else
+            hard "GET /__cutover_unknown_path__ -> ${UNKNOWN_CODE:-000} (expected 404 http_error envelope)"
+        fi
+    fi
 fi
 
 # ==================================================== Final summary
@@ -683,9 +805,10 @@ if [ "$HARD_FAILS" -gt 0 ]; then
 fi
 if [ "$DEGRADED_COUNT" -gt 0 ]; then
     say "Result: DEGRADED (exit 2). Hard checks passed, but the items above are down."
-    say "The Rust API can start — degraded features answer 502/503/enqueued:false"
-    say "per their ADRs — but confirm with the user that the degradation is"
-    say "acceptable before pointing any traffic at it. See README §7–§8."
+    say "The Rust API can start — degraded features answer 503 with their"
+    say "route-specific sidecar codes, or enqueued:false, per their ADRs —"
+    say "but confirm with the user that the degradation is acceptable"
+    say "before pointing any traffic at it. See README §7–§8."
     exit 2
 fi
 say "Result: GO (exit 0). All hard checks passed and no sidecar is down."

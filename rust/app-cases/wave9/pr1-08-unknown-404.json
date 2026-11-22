@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"pr1.cutover step 7: unknown path is a native 404 in Python's error envelope","expected":{"error":{"code":"http_error","message":"Not Found"}},"expected_status":404,"method":"GET","path":"/__cutover_unknown_path__"}

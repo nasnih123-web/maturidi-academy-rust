@@ -15,15 +15,17 @@ on a NEW Railway server, fully separate.
     — 8 files, 891 insertions, backend `apps/api/app/modules/videos/*` + CRM
   - Combined base commits: `c414abb` (merge #193), `5d1cb02` (merge #194)
 - #193 and #194 are independent single-commit branches off main; neither contains the other.
+- **Locked migration base: `rust-base` HEAD `5d1cb02bf7665ad04cf13e32360759de47443ff8`** (merge of PR #194; parents `c414abb` + `e22b71d`; verified 2026-11-22, re-verified in Wave 9 PR-1). The base does not move.
 - New repo: `nasnih123-web/maturidi-academy-rust` (public, created 2026-11-22 via cloud browser, empty)
 
 ## Scope (confirmed by user 2026-11-22)
 
 - Phase 1: backend API only. Web / CRM / mobile UI stay in React/Next.js and keep calling the same API.
-- UI rewrite decision comes later, by the user.
+- **UI decision (made in Wave 9, user 2026-11-22): the UIs stay TypeScript — no Rust UI rewrite, ever, under this plan.** Web, CRM, mobile and desktop remain as they are and keep calling the same API.
 - Compatibility: HTTP routes, status codes, response shapes, DB schema and auth stay identical,
-  so existing clients work unchanged. (To be confirmed as ADR — see DECISIONS.md.)
+  so existing clients work unchanged. (ADR-006.)
 - Cutover: only with the user's explicit go-ahead, on a new Railway server. Never touch live.
+- **Wave 9 standing rules:** every change goes in an independent PR with tests and docs; a PR is never declared complete on SQLite tests alone; the live project, its domains/DNS and its database are never touched; no incomplete feature is reported as complete.
 
 ## Analyze result (rust-anything 3.1.0, `analyze apps/api --whole-app --lang python`)
 
@@ -66,27 +68,41 @@ The honest path for a pure Rust server is:
    a pure function is ported).
 3. **Lift** only when fallback rate is 0 and every unit passes `gate`.
 
-## Hard dependencies (no Rust equivalent — need a decision each)
+## Hard dependencies (decided per item — Wave 9 PR-1)
 
-- `faster-whisper` (STT) — no Rust crate; options: call whisper.cpp / external STT service, or keep as a sidecar.
-- `sherpa-onnx` (Zipformer ASR, hifz scoring) — ONNX Runtime in Rust, or sidecar.
-- `sentence-transformers` (embeddings, brings torch) — ONNX Runtime / external embedding service, or sidecar.
-- `telethon` / `python-telegram-bot` — Rust Telegram crates exist but are not drop-in; bot behaviour must be re-proved.
-- `reportlab` (PDF) — Rust PDF crates are partial; certificates / PDFs need a decision.
-- `pgvector` — `pgvector` Rust support via sqlx + pgvector crate; check.
-- `arq` + Redis workers, `argon2`, `pyotp`, `hijri-converter`, `arabic-reshaper` / `bidi`,
-  `minio`, `opentelemetry`, `sentry-sdk` — each needs a crate choice (see PLAN-API.md D30–D69).
+Each item below was decided during the waves; the ADR is the record.
+Nothing here is still open as a porting decision (production gaps are
+Wave 9 PR-3 work, not porting decisions).
 
-## Open questions (for the user — see DECISIONS.md)
+- `faster-whisper` (STT) — Python sidecar via the sidecar contract
+  (ADR-046 → ADR-134); subtitle generation stays a Python sidecar
+  (ADR-045).
+- `sherpa-onnx` (Zipformer ASR, hifz scoring) — Python sidecar via the
+  sidecar contract (ADR-031 → ADR-134); the live stream stays an
+  explicit 503 (ADR-031).
+- `sentence-transformers` (embeddings) — hash-only in Rust (ADR-019);
+  `embedding_vec` stays NULL; pgvector stays a schema-only concern.
+- `telethon` / `python-telegram-bot` — connect honestly 503, sends
+  degrade to `failed` (ADR-114/115/116).
+- `reportlab` (PDF) — certificate PDF stays a Python sidecar (ADR-061);
+  receipt PDF is a sidecar-contract route (ADR-076 → ADR-134).
+- `pgvector` — schema extension only; Rust never queries it (ADR-019).
+- `arq` + Redis workers — stay Python (ADR-125); Rust only writes
+  outbox rows. `argon2`, `pyotp`, `hijri-converter`,
+  `arabic-reshaper` / `bidi`, `minio`, `opentelemetry`, `sentry-sdk` —
+  each ported or explicitly dropped per its module ADR (see
+  PLAN-API.md D30–D69 for the original survey).
 
-- Confirm Axum rewrite (path B) vs. PyO3 bridge-only (path A, not a pure Rust server).
-- Confirm compatibility bar (identical routes / DB / auth).
-- Confirm first wave: front door + one small read-only route to prove the pipeline,
-  or a different first module.
-- Confirm how to treat the hard dependencies above (sidecar / external service / reimplement / drop).
-- Confirm equivalence bar for floats, error text, validation errors (Pydantic errors will differ in Rust).
+## Open questions — resolved (Wave 9 PR-1)
 
-## Port progress — Wave 1 + Wave 2 + Wave 3 + Wave 4 native (2026-11-22)
+- Axum rewrite (path B) vs. PyO3 bridge-only (path A): **Axum** (ADR-005).
+- Compatibility bar (identical routes / DB / auth): **yes** (ADR-006).
+- First wave: front door + `/health` + `/ready` (ADR-007).
+- Hard dependencies: decided per item — see "Hard dependencies" above.
+- Equivalence bar for floats, error text, validation errors: status + error
+  shape pinned, exact Pydantic wording not reproduced (ADR-006).
+
+## Port progress — Waves 1–8 (complete) + Wave 9 (PR-1 in progress)
 
 - Wave 1 (done, verified green locally): Axum front door, `GET /health`,
   `GET /ready`, proxy fallback to `ORIGIN_URL`. See ADR-007 / ADR-013.
@@ -109,10 +125,12 @@ The honest path for a pure Rust server is:
   `cargo test` incl. Postgres smoke): videos + voice are answered natively
   in Rust; everything else still proxies. Kill switch per module:
   `RUST_ANYTHING_UNIT_<VIDEOS|VOICE>=original` falls back to the Python
-  origin. Details: ADR-044 – ADR-050. Total native routes: 232
-  (Wave 2: 49, Wave 3: 81, Wave 4: 75 — quran 23 + hifz 52; Wave 5: 27 —
+  origin. Details: ADR-044 – ADR-050. Total native routes: 233
+  (Wave 2: 49, Wave 3: 81, Wave 4: 76 — quran 23 + hifz 53; Wave 5: 27 —
   videos 23 + voice 4; plus the Wave 1 front door `GET /health` +
-  `GET /ready`).
+  `GET /ready`). (Correction, Wave 9 PR-1 / ADR-148: the Wave 5 report
+  said 232 with hifz 52; the recount is 233 with hifz 53. Wave 6's 302
+  and the pre-Wave-7 304 were already right.)
   - quran: `GET /api/v1/quran/surahs`, `/surah/{number}`,
     `/ayah/{surah}/{ayah}`, `/recitation/reciters`,
     `/recitation/timing/generated`, `/recitation/timing`, `/providers`,
@@ -152,11 +170,14 @@ The honest path for a pure Rust server is:
     `GET|PATCH|DELETE /api/v1/quran/hifz/tasmi/sessions/{session_id}`,
     `GET /api/v1/quran/hifz/data/preview`,
     `POST /api/v1/quran/hifz/data/purge`
-  - Intentionally NOT native (ADR-031): the ASR endpoints
+  - Intentionally NOT native in Wave 5 (ADR-031): the ASR endpoints
     `POST /api/v1/quran/hifz/attempts/{id}/grade`, `grade-word`,
     `POST /api/v1/quran/hifz/voice-search`,
-    `POST /api/v1/quran/hifz/tests/{id}/questions/{qid}/answer` stay
-    proxied; the live stream `GET .../attempts/{id}/stream` is
+    `POST /api/v1/quran/hifz/tests/{id}/questions/{qid}/answer` were
+    not registered then (they fell through to the proxy); **since Wave 8
+    they are sidecar-contract routes (ADR-134)** — explicit forwarding
+    to `SIDECAR_URL`, honest 503 `hifz_asr_unavailable` when it is
+    unset/unreachable. The live stream `GET .../attempts/{id}/stream` is
     registered explicitly as 503 `hifz_live_unavailable`.
   - videos: `GET /api/v1/videos`, `/playlists`, `/playlists/{id}`,
     `/saved`, `GET|POST|DELETE /api/v1/videos/{id}/saved`,
@@ -173,9 +194,12 @@ The honest path for a pure Rust server is:
   - voice: `GET /api/v1/voice/tts-audio-by-ref`,
     `GET|PUT /api/v1/admin/voice/settings`,
     `GET /api/v1/admin/voice/usage`
-  - Intentionally NOT native (ADR-046): `POST /api/v1/voice/transcribe`
-    and `POST /api/v1/voice/ask` stay proxied (no STT in the Rust
-    binary). Voice intents + TTS are ported as modules (ADR-047);
+  - Intentionally NOT native in Wave 5 (ADR-046): `POST /api/v1/voice/transcribe`
+    and `POST /api/v1/voice/ask` were not registered then (no STT in the Rust
+    binary; they fell through to the proxy). **Since Wave 8 they are
+    sidecar-contract routes (ADR-134)** — explicit forwarding to
+    `SIDECAR_URL`, honest 503 `voice_stt_unavailable` when it is
+    unset/unreachable. Voice intents + TTS are ported as modules (ADR-047);
     audio lessons are Wave 6 LMS (ADR-048).
   - Tests: `rust/app/tests/wave5.rs` (15 tests, sqlite in-memory;
     `wave5_pg_smoke` replays the critical path on local Postgres when
@@ -250,8 +274,11 @@ The honest path for a pure Rust server is:
     `/gateways`, `/manual-donations`,
     `/manual-donations/{proof_id}/proof-image`, `/fx-rate`,
     `POST .../manual-donations/{proof_id}/approve`, `.../reject`
-    (ZarinPal + IDPay live over HTTPS, ADR-078; receipt PDF stays
-    proxied, ADR-076; receipt images use the ADR-051 scan gate, ADR-077)
+    (ZarinPal + IDPay live over HTTPS, ADR-078; receipt PDF was
+    proxied in Wave 7 (ADR-076) and is a **sidecar-contract route
+    since Wave 8 (ADR-134)** — explicit forwarding to `SIDECAR_URL`,
+    honest 503 `receipt_pdf_unavailable` when it is unset/unreachable;
+    receipt images use the ADR-051 scan gate, ADR-077)
   - admin: `GET|PUT /api/v1/admin/settings`,
     `POST /api/v1/admin/settings/reencrypt`,
     `GET /api/v1/admin/events/dead-letter`,
@@ -344,11 +371,15 @@ The honest path for a pure Rust server is:
     `/latest-fatwa`, `/zakat-mini` (gate: `X-API-Key` or `?embed_token=`;
     CORS wildcard NOT ported — deploy layer, ADR-121; ayah cache
     in-process only, ADR-122)
-  - workers: ARQ queues, dispatcher, `/ws/events`, `/metrics` and
-    `/api/v1/health` all stay on the Python origin (ADR-125 – ADR-128);
-    `projects/due_cron` noted as portable-in-principle, out of scope
-    (ADR-129). The `projects` module (17 routes) is NOT in Wave 7 and
-    stays proxied.
+  - workers: ARQ queues + dispatcher stay Python (ADR-125) — Rust only
+    writes outbox rows; the Python workers still do the processing
+    (see `scripts/cutover-README.md` §6 for the six queues). `/ws/events`,
+    `/metrics` and `/api/v1/health` were still on the Python origin in
+    Wave 7 (ADR-126 – ADR-128) but are **native since Wave 8
+    (ADR-135 – ADR-137)**. `projects/due_cron` was out of scope in Wave 7
+    (ADR-129); the `projects` module (17 endpoints + the due-soon-cycle
+    endpoint = 18 routes) was **ported natively in Wave 8
+    (ADR-141/142)**.
   - Merge fixes (ADR-132): the calculator engines
     (`calc_decimal`, `calc_engines`, `calc_mosaref`) are declared once
     at the crate root — `routes_widgets.rs` had `#[path]`-included a
@@ -372,7 +403,7 @@ The honest path for a pure Rust server is:
   - projects: `routes_projects.rs` — all 17 Python endpoints native (18 routes incl. the due-soon-cycle endpoint, ADR-141/142): project CRUD with cursor pagination (`base64url("<ISO ts>|<uuid>")`, 400 `bad_cursor`) and live `task_count`; task CRUD + kanban `move` with the `TASK_TRANSITIONS` guard (422 `invalid_status_transition` with `{from, to, allowed}`); reverse lookup `GET /api/v1/projects/tasks/by-entity` (registered before `/tasks/{task_id}`); staff CRUD (409 `staff_exists`, one row per user); staff-reader gate (authenticated user with `projects.manage` or an active `staff_members` row, else 403 `forbidden`); audit rows + domain events (`project.created`, `task.created`, `task.assigned`, `task.status_changed`, `task.due_soon`); assign/due-soon notifications honouring `notification_preferences` (`in_app` writes a `notifications` row; email/SMS count as delivered when an address/phone exists, per the stub mailer — ADR-143); due-soon cycle as native `run_task_due_soon_cycle(now)` + `POST /api/v1/admin/projects/due-soon-cycle` (ADR-142; 24h window, 20h anti-spam, unassigned rows still stamped). `TEST_SCHEMA` gains `projects`, `tasks` (+ `ix_tasks_related_entity`), `staff_members`.
   - Route accounting: Python has 468 endpoints (467 HTTP decorators + the hifz WS stream) plus `/docs` (dev-only), `/openapi.json` (auto) and the `/static` mount. Rust serves **471** route+method combos: **463 native** (440 pre-lift + 5 lift-new + 18 projects) + **8 sidecar-contract**. The 6 generic CMS `{resource}` routes cover all 36 concrete Python CMS routes, and the due-soon-cycle endpoint is a deliberate Wave 8 addition with no Python HTTP equivalent. The pre-lift native count is **440**, re-verified two ways (source parse and live-router spec); the 439 figure was a miscount (a `//` comment hid the video-subtitles route from a naive parse) and is refuted in ADR-147.
   - Replay (ADR-138): `rust/app/tests/wave8.rs` replays all 127 app-cases from waves 2–7 against the pure-Rust build (fresh sqlite DB per case, auth provisioned by label, mechanical placeholder substitution, per-file seeding hooks) — final replay 2026-11-22: **122 passed, 0 failed, 5 skipped** (wave2 11/0/3, wave3 14/0/0, wave4 15/0/0, wave5 14/0/0, wave6 18/0/2, wave7 50/0/0); the 5 skipped are documentation-only by design (wave2/08, 09, 10 need tokens from a prior step; wave6/lib-05 needs a minted download signature; wave6/lib-06 has a prose multipart body). The first run had 3 failures, all case-file drift verified against Python and corrected to the Python behaviour (wave2/01 nested `places.globe` + no vapid key; lib-04 no `total`; syn-08 bare-array response); PG smoke green.
-  - Cutover: `scripts/cutover.sh` (read-only preflight: live-project guard, env, Postgres, Redis, schema, bundled data, sidecar UP/DOWN table; exit 0 GO / 2 DEGRADED / 1 NO-GO; `--dry-run`) + `scripts/cutover-README.md` (Persian runbook: deploy order, env-var table, smoke checklist, rollback). Script only — never executed against a live server. Open items from the cutover worker: no Dockerfile / `railway.toml` in the Rust repo yet; whether Railway Postgres provides `vector`/`pg_trgm`; the mail/SMS delivery path on the Rust deployment (mailer is a stub); widget CORS wildcard must come from the deploy layer.
+  - Cutover: `scripts/cutover.sh` (read-only preflight: live-project guard, env, Postgres, Redis, schema, bundled data, sidecar UP/DOWN table; exit 0 GO / 2 DEGRADED / 1 NO-GO; `--dry-run`) + `scripts/cutover-README.md` (Persian runbook: deploy order, env-var table, smoke checklist, rollback). Script only — never executed against a live server. `Dockerfile` + `railway.toml` were added in the Wave 8 push and are documented as-is in Wave 9 PR-1 (`scripts/cutover-README.md` §3) — **neither has ever been built; the first Railway build is their first verification**. Open items: whether Railway Postgres provides `vector`/`pg_trgm`; the mail/SMS delivery path on the Rust deployment (mailer is a stub); widget CORS wildcard must come from the deploy layer.
   - Tests: `rust/app/tests/wave8_projects.rs` (18: 17 sqlite + `wave8_projects_pg_smoke`), `rust/app/tests/wave8_lift.rs` (16: 15 sqlite + `wave8_pg_smoke`), `rust/app/tests/wave8.rs` (2: `replay_all_app_cases` — 122 passed / 0 failed / 5 skipped over the 127 wave2–wave7 cases — + `wave8_pg_smoke`), `rust/app/tests/front_door.rs` (11, rewritten: proxy tests deleted, 404/405/metrics/health/openapi/sidecar-503 added). Cases: `rust/app-cases/wave8/` (`proj-01`–`proj-13`, `lift-01`–`lift-12` + README).
   - Tests: `rust/app/tests/wave4.rs` (24 tests, sqlite in-memory;
     `wave4_pg_smoke` replays the critical path on local Postgres when
@@ -418,8 +449,11 @@ The honest path for a pure Rust server is:
     `POST /api/v1/fatwa/questions`, `GET /api/v1/fatwa/clusters`,
     `GET /{id}`, `POST /{id}/answer`,
     `GET /api/v1/fatwas/saved`, `GET|POST|DELETE /{id}/saved`
-  - `POST /api/v1/fatwa/ask` is intentionally NOT native (assistant/mufti,
-    ADR-026) and stays proxied.
+  - `POST /api/v1/fatwa/ask` was intentionally NOT native in Wave 3 (assistant/mufti,
+    ADR-026) and fell through to the proxy then. **Since Wave 8 it is a
+    sidecar-contract route (ADR-134)** — explicit forwarding to
+    `SIDECAR_URL`, honest 503 `fatwa_ask_unavailable` when it is
+    unset/unreachable.
   - Tests: `rust/app/tests/wave3.rs` (20 tests, sqlite in-memory;
     `wave3_pg_smoke` replays the critical path on local Postgres when
     `WAVE2_PG_URL` is set). Cases: `rust/app-cases/wave3/` (14 cases).
@@ -454,9 +488,84 @@ The honest path for a pure Rust server is:
   - Not yet ported in Wave 2 (stubs / Wave 7): real mail/SMS delivery,
     ClamAV scan, S3 storage (see ADR-015).
 
+## Wave 9 — Production Readiness (PR-1 in progress)
+
+Goal: prepare the Rust backend for a real build, test and deployment on
+an **independent** Railway project. Standing rules (user directive
+2026-11-22 ~23:59 Tehran): the original repo `maturidi-academy` is
+untouched; live Railway, domains, DNS and the live database are untouched;
+the migration base is locked (see "Source base" above); web, CRM, mobile
+and desktop UIs stay TypeScript — no Rust UI rewrite; every change goes in
+an independent PR with tests and docs; no PR is declared complete on
+SQLite tests alone. PR order: PR-1 Architecture and Cutover
+Reconciliation → PR-2 CI and Build Verification → PR-3 Production
+Blockers → PR-4 Staging Deployment.
+
+### PR-1 reconciliation (verified from code, 2026-11-22)
+
+| Item | Before (docs) | After (correct) | Source |
+|---|---|---|---|
+| Total served route+method combos | 453 (ADR-139/147, stale) | **471** = 463 native + 8 sidecar | paren-depth count of `.route(` in `lib.rs` + `front_door` OpenAPI assertion |
+| Wave 5 total | 232 (hifz 52) | **233** (hifz 53) | same count; Wave 4 total is 76 |
+| TEST_SCHEMA tables | 116 | **119** | distinct `CREATE TABLE` names in `db.rs` |
+| Fatwa topics table | `fatwa_topics` (cutover.sh `CORE_TABLES`) | **`fiqh_topics`** | `apps/api/app/models/models.py:715` + TEST_SCHEMA |
+| ADR-026/031/046/076 | proxied routes (supersession implicit) | **superseded by ADR-134** (sidecar contract) | ADR-148 makes it explicit |
+| `CORS_ALLOW_ORIGINS` | "not read" (cutover README §5.3) | **IS read** — `/ws/events` Origin check (`lib.rs` + `routes_lift.rs` `origin_allowed`); only the widget `*` wildcard is deploy-layer (ADR-121) | `lib.rs` |
+| Alembic head | head `f2a3b4c5d6e7`, 50 revisions | confirmed: single linear chain, 50 files, 50 distinct revision ids, single head `f2a3b4c5d6e7`, root `bd898906c7e2` | `rust-base` checkout |
+| `ORIGIN_URL` | live in cutover.sh + docs | **deleted** — replaced by `SIDECAR_URL` (exactly the 8 sidecar routes) | ADR-133/134 |
+
+Per-module route breakdown (471 total): other (front door) 2, activity 1,
+admin 37, admin_content 17, api_keys 7, articles 13, auth 22, calculators
+16, content 17, fatwa 48, finance 23, hifz 53, home 3, library 16, lift 13
+(5 lift-new + 8 sidecar), lms 37, meta 3, places 9, projects 18, quran 23,
+social 24, sync 7, telegram 15, users 16, videos 23, voice 4, widgets 4.
+Per wave: Wave 2: 49, Wave 3: 81, Wave 4: 76 (quran 23 + hifz 53),
+Wave 5: 27, Wave 6: 69, Wave 7: 136, front door 2 → 440 pre-lift;
++5 lift-new + 18 projects = 463 native; +8 sidecar = 471.
+Full corrections in ADR-148.
+
+### PR-1 scope (what changed)
+
+- `scripts/cutover.sh` + `scripts/cutover-README.md` rewritten to Wave 8
+  reality: no `ORIGIN_URL`; `SIDECAR_URL` for exactly the 8 sidecar
+  routes; Step 7 added (live-endpoint probe of a running Rust binary,
+  gated on optional `RUST_API_URL`); exit codes 0 GO / 2 DEGRADED /
+  1 NO-GO; read-only preflight, never deploys, never prints secrets.
+- Six ARQ queues documented (full detail in `cutover-README.md` §6):
+  critical (payments, cron only), ai (fatwa/voice ingestion), media
+  (STT/TTS/OCR/subtitles), telegram (bot + import), notifications (email/
+  SMS/push, cron only), analytics (cron only). The dispatcher runs
+  **in-process** in the Python sidecar API lifespan; the Rust WS poller
+  only reads `domain_events` and never marks rows processed.
+- `Dockerfile` + `railway.toml` documented as-is (full detail in
+  `cutover-README.md` §3): both exist, **neither has ever been built**;
+  the first Railway build is their first verification (PR-2). Safety
+  property: Dockerfile `CMD` and railway.toml `startCommand` agree
+  (`./maturidi-api-rs`).
+- Tests: `rust/app/tests/wave9_pr1.rs` guards the preflight logic
+  (script syntax + dry-run output + guard + live endpoints on sqlite
+  and on local Postgres when `WAVE2_PG_URL` is set); cases under
+  `rust/app-cases/wave9/`.
+
+### PR-2 / PR-3 / PR-4 (not started)
+
+- PR-2: `cargo build --release --locked`, real Docker build in CI,
+  Postgres `vector` + `pg_trgm` + Redis tests in CI, Alembic check
+  against the locked base, cargo audit + SBOM; merge blocked on any
+  gate failure.
+- PR-3: real email + SMS delivery; complete sidecar contract + tests
+  for ASR, fatwa assistant, PDF; Python workers + queue processing;
+  durable storage; malware scan + upload limits; Release Blockers list.
+- PR-4: new Railway project; independent Postgres + Redis; migrations
+  on the test database; sidecar + workers up; build + deploy the Rust
+  version; fixed Cutover Preflight; end-to-end tests for all major
+  modules; load test vs FastAPI; backup/restore + rollback test.
+
 ## Units (status)
 
-All `open` until the user confirms the plan. No unit claimed yet.
+All units are ported (Waves 1–8); the plan is complete. The per-wave
+sections above are the record. Remaining work is Wave 9 (production
+readiness), not porting.
 
 - Wave 0 (tangled core, one piece, 49,484 lines): see above.
 - Wave 1: `alembic/` (43, ready), `app/modules/activity/` (69), `api_keys/` (789),

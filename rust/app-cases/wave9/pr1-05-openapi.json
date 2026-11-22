@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"pr1.cutover step 7: /openapi.json lists 471 route+method combos","expected":{"openapi":"3.0.3","paths_include":["/health","/metrics","/api/v1/health","/ws/events","/api/v1/fatwa/ask"],"route_method_combos":471},"expected_status":200,"method":"GET","path":"/openapi.json"}
