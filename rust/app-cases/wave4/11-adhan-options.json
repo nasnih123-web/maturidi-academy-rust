@@ -1,0 +1,12 @@
+{
+  "case": "adhan.options",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/adhan/options",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "methods": "<10 items>",
+    "cities": "<7 items>"
+  }
+}

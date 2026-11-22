@@ -1,0 +1,13 @@
+{
+  "case": "quran.ayah out of range",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/quran/ayah/1/8",
+  "body": null,
+  "expected_status": 404,
+  "expected": {
+    "error": {
+      "code": "ayah_not_found"
+    }
+  }
+}

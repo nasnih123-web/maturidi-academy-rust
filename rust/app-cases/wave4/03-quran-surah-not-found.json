@@ -1,0 +1,13 @@
+{
+  "case": "quran.surah unknown number",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/quran/surah/115",
+  "body": null,
+  "expected_status": 404,
+  "expected": {
+    "error": {
+      "code": "surah_not_found"
+    }
+  }
+}

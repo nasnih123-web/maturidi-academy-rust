@@ -1,0 +1,12 @@
+{
+  "case": "quran.providers config",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/quran/providers",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "active_provider": "self_hosted",
+    "text_edition": "quran-uthmani"
+  }
+}

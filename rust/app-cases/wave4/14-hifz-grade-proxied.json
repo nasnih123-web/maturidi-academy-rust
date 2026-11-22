@@ -1,0 +1,14 @@
+{
+  "case": "hifz.grade stays proxied (no ASR in the Rust binary)",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/quran/hifz/attempts/<uuid>/grade",
+  "body": {
+    "surah": 1,
+    "ayah": 1
+  },
+  "expected_status": 502,
+  "expected": {
+    "status": "bad_gateway"
+  }
+}

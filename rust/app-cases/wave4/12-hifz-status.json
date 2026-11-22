@@ -1,0 +1,13 @@
+{
+  "case": "hifz.status (ASR not embedded)",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/quran/hifz/status",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "engine": "zipformer",
+    "available": false,
+    "map_available": false
+  }
+}

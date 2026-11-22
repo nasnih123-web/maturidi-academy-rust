@@ -1,0 +1,15 @@
+{
+  "case": "quran.surah get Fatiha (bundled editions)",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/quran/surah/1?translation=fa.rowwad&tafsir=fa.mokhtasar",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "surah": 1,
+    "name_ar": "الفاتحة",
+    "edition_ids": [
+      "quran-uthmani"
+    ]
+  }
+}

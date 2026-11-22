@@ -1,0 +1,13 @@
+{
+  "case": "hifz.live stream cannot be relayed by the HTTP proxy",
+  "auth": "bearer",
+  "method": "GET",
+  "path": "/api/v1/quran/hifz/attempts/<uuid>/stream",
+  "body": null,
+  "expected_status": 503,
+  "expected": {
+    "error": {
+      "code": "hifz_live_unavailable"
+    }
+  }
+}

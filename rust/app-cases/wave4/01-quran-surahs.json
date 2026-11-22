@@ -1,0 +1,18 @@
+{
+  "case": "quran.surahs list",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/quran/surahs",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "total": 114,
+    "items": [
+      {
+        "number": 1,
+        "name_ar": "الفاتحة",
+        "ayahs": 7
+      }
+    ]
+  }
+}

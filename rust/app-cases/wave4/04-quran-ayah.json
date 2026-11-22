@@ -1,0 +1,17 @@
+{
+  "case": "quran.ayah get 1:1 (bundled translation)",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/quran/ayah/1/1?translation=fa.rowwad",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "surah": 1,
+    "ayah": 1,
+    "editions": [
+      {
+        "edition": "quran-uthmani"
+      }
+    ]
+  }
+}

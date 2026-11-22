@@ -1,0 +1,18 @@
+{
+  "case": "hifz.attempt create Fatiha",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/quran/hifz/attempts",
+  "body": {
+    "surah": 1,
+    "start_ayah": 1,
+    "end_ayah": 7
+  },
+  "expected_status": 201,
+  "expected": {
+    "id": "<uuid>",
+    "surah": 1,
+    "status": "in_progress",
+    "engine": "zipformer"
+  }
+}

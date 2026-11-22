@@ -1,0 +1,23 @@
+{
+  "case": "quran.reading-state stale PUT returns 409 with stored state",
+  "auth": "bearer",
+  "method": "PUT",
+  "path": "/api/v1/quran/reading-state",
+  "body": {
+    "bookmarks": [],
+    "last_read": {
+      "surah": 1,
+      "ayah": 1,
+      "view": "mushaf",
+      "mushaf": "1405",
+      "savedAt": 50
+    },
+    "updated_at": 50
+  },
+  "expected_status": 409,
+  "expected": {
+    "last_read": {
+      "surah": 2
+    }
+  }
+}

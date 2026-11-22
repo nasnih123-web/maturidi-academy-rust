@@ -1,0 +1,13 @@
+{
+  "case": "adhan.times Tehran",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/adhan/times?city=tehran&date=2026-03-21",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "date": "2026-03-21",
+    "method": "council",
+    "madhab": "hanafi"
+  }
+}
