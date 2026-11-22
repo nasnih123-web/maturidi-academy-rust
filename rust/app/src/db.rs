@@ -783,7 +783,47 @@ CREATE TABLE ai_usage_log (
 CREATE TABLE library_items (
     id UUID PRIMARY KEY, title JSONB NOT NULL, description JSONB, transcript TEXT,
     workflow_status TEXT NOT NULL DEFAULT 'draft', visibility TEXT NOT NULL DEFAULT 'public',
+    kind TEXT NOT NULL DEFAULT 'video', external_url TEXT, media_key TEXT,
+    cover_media_key TEXT, scholar_id UUID, topic_tags JSONB NOT NULL DEFAULT '[]',
+    duration_seconds INTEGER, published_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE video_playlists (
+    id UUID PRIMARY KEY, title JSONB NOT NULL, description JSONB,
+    cover_media_key TEXT, scholar_id UUID, is_published BOOLEAN NOT NULL DEFAULT FALSE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE video_playlist_items (
+    id UUID PRIMARY KEY, playlist_id UUID NOT NULL, item_id UUID NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL,
+    UNIQUE(playlist_id, item_id)
+);
+CREATE TABLE user_video_progress (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, item_id UUID NOT NULL,
+    position_seconds DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    duration_seconds DOUBLE PRECISION,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ,
+    UNIQUE(user_id, item_id)
+);
+CREATE TABLE user_saved_videos (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL, item_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL, UNIQUE(user_id, item_id)
+);
+CREATE TABLE item_subtitles (
+    id UUID PRIMARY KEY, item_id UUID NOT NULL, lang TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending', vtt TEXT, error TEXT,
+    created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ,
+    UNIQUE(item_id, lang)
+);
+CREATE TABLE voice_sessions (
+    id UUID PRIMARY KEY, user_id UUID, lang TEXT NOT NULL DEFAULT 'fa',
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE voice_usage_log (
+    id UUID PRIMARY KEY, session_id UUID NOT NULL, intent TEXT NOT NULL,
+    lang TEXT NOT NULL, stt_ms INTEGER, tts_provider TEXT,
+    created_at TIMESTAMPTZ NOT NULL
 );
 CREATE TABLE courses (
     id UUID PRIMARY KEY, title JSONB NOT NULL, description JSONB,

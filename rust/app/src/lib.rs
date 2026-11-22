@@ -7,7 +7,7 @@
 //!
 //! Kill switch (per module): `RUST_ANYTHING_UNIT_<NAME>=original`
 //! (`META`, `ACTIVITY`, `API_KEYS`, `USERS`, `AUTH`, `HOME`, `CONTENT`,
-//! `ARTICLES`, `FATWA`) un-registers that module's native routes, so
+//! `ARTICLES`, `FATWA`, `VIDEOS`, `VOICE`) un-registers that module's native routes, so
 //! they proxy to the Python server again.
 
 use std::{
@@ -46,6 +46,7 @@ mod hifz_logic;
 mod hifz_mutashabihat;
 mod hijri;
 mod jwt;
+mod library_visibility;
 mod localized;
 mod mail;
 mod quran_data;
@@ -62,11 +63,17 @@ mod routes_home;
 mod routes_meta;
 mod routes_quran;
 mod routes_users;
+mod routes_videos;
+mod routes_voice;
 mod settings;
 mod storage;
+mod subtitles;
 mod sync;
 mod totp;
 mod validate;
+mod video_links;
+mod voice_intents;
+mod voice_tts;
 mod workflow;
 
 pub use db::{init_test_schema, Arg, Db, IntoArg, TEST_SCHEMA};
@@ -79,6 +86,9 @@ pub use routes_api_keys::{
 /// Settings encryption envelope — public so tests (and later admin waves)
 /// can seed stored settings exactly as the app writes them.
 pub use settings::encrypt_value;
+/// Signed-URL builder — public so tests can mint valid download URLs
+/// exactly as the app does.
+pub use storage::presigned_url;
 
 /// Runtime configuration, read from the environment.
 ///
@@ -273,6 +283,12 @@ impl AppState {
     /// `get_settings_version()` — process-local counter, starts at 0.
     pub fn settings_version(&self) -> u64 {
         self.settings_version.load(Ordering::Relaxed)
+    }
+
+    /// `bump_settings_version()` — called after a settings write
+    /// (voice settings update, Wave 5); the counter only ever grows.
+    pub fn bump_settings_version(&self) {
+        self.settings_version.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Monthly API-key usage counter: `hit` returns the running total
@@ -776,6 +792,91 @@ pub fn build_router(state: AppState) -> Router {
             .route(
                 "/api/v1/quran/hifz/data/purge",
                 post(routes_hifz::data_purge),
+            );
+    }
+    if unit_native("VIDEOS") {
+        router = router
+            .route("/api/v1/videos", get(routes_videos::public_list))
+            .route(
+                "/api/v1/videos/playlists",
+                get(routes_videos::public_playlist_list),
+            )
+            .route(
+                "/api/v1/videos/playlists/{playlist_id}",
+                get(routes_videos::public_playlist_get),
+            )
+            .route("/api/v1/videos/saved", get(routes_videos::saved_list))
+            .route(
+                "/api/v1/videos/{item_id}/saved",
+                get(routes_videos::saved_get)
+                    .post(routes_videos::saved_save)
+                    .delete(routes_videos::saved_unsave),
+            )
+            .route("/api/v1/videos/{item_id}", get(routes_videos::watch_get))
+            .route(
+                // matchit allows only one capture per segment, so the
+                // `.vtt` suffix is captured whole (`{lang_vtt}`) and
+                // stripped in the handler — 404 for a non-`.vtt` name.
+                "/api/v1/videos/{item_id}/subtitles/{lang_vtt}",
+                get(routes_videos::subtitle_vtt_get),
+            )
+            .route(
+                "/api/v1/videos/{item_id}/progress",
+                get(routes_videos::progress_get).put(routes_videos::progress_put),
+            )
+            .route(
+                "/api/v1/admin/videos/playlists",
+                get(routes_videos::admin_playlist_list).post(routes_videos::admin_playlist_create),
+            )
+            .route(
+                "/api/v1/admin/videos/playlists/{playlist_id}",
+                patch(routes_videos::admin_playlist_update)
+                    .delete(routes_videos::admin_playlist_delete),
+            )
+            .route(
+                "/api/v1/admin/videos/playlists/{playlist_id}/items",
+                post(routes_videos::admin_playlist_item_add),
+            )
+            .route(
+                "/api/v1/admin/videos/playlists/{playlist_id}/items/{item_id}",
+                delete(routes_videos::admin_playlist_item_remove),
+            )
+            .route(
+                "/api/v1/admin/videos/playlists/{playlist_id}/items/order",
+                put(routes_videos::admin_playlist_reorder),
+            )
+            .route(
+                "/api/v1/admin/videos/subtitles",
+                get(routes_videos::admin_subtitle_statuses),
+            )
+            .route(
+                "/api/v1/admin/videos/{item_id}/subtitles/generate",
+                post(routes_videos::admin_subtitle_generate),
+            )
+            .route(
+                "/api/v1/admin/videos/{item_id}/subtitles/{lang}",
+                get(routes_videos::admin_subtitle_cues_get)
+                    .put(routes_videos::admin_subtitle_cues_put),
+            )
+            .route(
+                "/api/v1/admin/videos/candidates",
+                get(routes_videos::admin_candidates),
+            );
+    }
+    if unit_native("VOICE") {
+        router = router
+            .route(
+                "/api/v1/voice/tts-audio-by-ref",
+                get(routes_voice::tts_audio_by_ref),
+            )
+            .route(
+                "/api/v1/admin/voice/settings",
+                get(routes_voice::get_voice_settings)
+                    .put(routes_voice::admin_update_voice_settings),
+            )
+            .route(
+                "/api/v1/admin/voice/usage",
+                get(routes_voice::list_voice_usage),
             );
     }
     if unit_native("META") {
