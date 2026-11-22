@@ -86,7 +86,7 @@ The honest path for a pure Rust server is:
 - Confirm how to treat the hard dependencies above (sidecar / external service / reimplement / drop).
 - Confirm equivalence bar for floats, error text, validation errors (Pydantic errors will differ in Rust).
 
-## Port progress — Wave 1 + Wave 2 + Wave 3 native (2026-11-22)
+## Port progress — Wave 1 + Wave 2 + Wave 3 + Wave 4 native (2026-11-22)
 
 - Wave 1 (done, verified green locally): Axum front door, `GET /health`,
   `GET /ready`, proxy fallback to `ORIGIN_URL`. See ADR-007 / ADR-013.
@@ -100,6 +100,67 @@ The honest path for a pure Rust server is:
   answered natively in Rust; everything else still proxies. Kill switch per
   module: `RUST_ANYTHING_UNIT_<HOME|CONTENT|ARTICLES|FATWA>=original` falls
   back to the Python origin. Details: ADR-018 – ADR-030.
+- Wave 4 (done, verified green locally — `cargo fmt`, `clippy -D warnings`,
+  `cargo test` incl. Postgres smoke): quran + hifz are answered natively in
+  Rust; everything else still proxies. Kill switch per module:
+  `RUST_ANYTHING_UNIT_<QURAN|HIFZ>=original` falls back to the Python
+  origin. Details: ADR-031 – ADR-043. Total native routes: 205
+  (Wave 2: 49, Wave 3: 81, Wave 4: 75 — quran 23 + hifz 52; plus the
+  Wave 1 front door `GET /health` + `GET /ready`).
+  - quran: `GET /api/v1/quran/surahs`, `/surah/{number}`,
+    `/ayah/{surah}/{ayah}`, `/recitation/reciters`,
+    `/recitation/timing/generated`, `/recitation/timing`, `/providers`,
+    `PUT /api/v1/quran/registry/custom-providers/{provider_id}/key`,
+    `GET /api/v1/quran/munajat/status`, `POST|GET /api/v1/quran/notes`,
+    `PUT|DELETE /api/v1/quran/notes/{note_id}`,
+    `GET|PUT /api/v1/quran/reading-state`,
+    `POST /api/v1/tasbih/sessions`,
+    `POST /api/v1/tasbih/sessions/{session_id}/count`,
+    `GET /api/v1/tasbih/today`, `GET /api/v1/adhan/times`, `/range`,
+    `/options`, `/geocode`, `/reverse`
+  - hifz: `GET /api/v1/quran/hifz/status`,
+    `POST|GET /api/v1/quran/hifz/attempts`,
+    `GET /api/v1/quran/hifz/attempts/resume`,
+    `GET|DELETE /api/v1/quran/hifz/attempts/{attempt_id}`,
+    `POST .../complete`, `PATCH .../position`, `POST .../pause`,
+    `POST .../resume`, `GET .../mistakes`, `POST .../peek`,
+    `POST .../dispute`, `DELETE /api/v1/quran/hifz/mistakes/{mistake_id}`,
+    `GET|PUT /api/v1/quran/hifz/settings`,
+    `GET|PUT|DELETE /api/v1/quran/hifz/listen-position`,
+    `GET /api/v1/quran/hifz/stats`, `/review`,
+    `GET /api/v1/quran/hifz/admin/attempts`,
+    `DELETE /api/v1/quran/hifz/admin/attempts/{attempt_id}`,
+    `POST /api/v1/quran/hifz/reviews`,
+    `GET /api/v1/quran/hifz/reviews/due`,
+    `POST|GET /api/v1/quran/hifz/plans`,
+    `GET|PATCH|DELETE /api/v1/quran/hifz/plans/{plan_id}`,
+    `PATCH /api/v1/quran/hifz/plans/{plan_id}/items/{item_id}`,
+    `GET /api/v1/quran/hifz/dashboard`, `/activity`, `/suggested`,
+    `POST|GET /api/v1/quran/hifz/tests`,
+    `GET|DELETE /api/v1/quran/hifz/tests/{test_id}`,
+    `POST .../complete`, `POST .../questions/{question_id}/skip`,
+    `POST .../questions/{question_id}/peek`,
+    `POST .../questions/{question_id}/events/{event_index}/remove`,
+    `GET /api/v1/quran/hifz/mutashabihat`, `/mutashabihat/phrase`,
+    `/mutashabihat/count`, `POST|GET /api/v1/quran/hifz/tasmi/sessions`,
+    `GET|PATCH|DELETE /api/v1/quran/hifz/tasmi/sessions/{session_id}`,
+    `GET /api/v1/quran/hifz/data/preview`,
+    `POST /api/v1/quran/hifz/data/purge`
+  - Intentionally NOT native (ADR-031): the ASR endpoints
+    `POST /api/v1/quran/hifz/attempts/{id}/grade`, `grade-word`,
+    `POST /api/v1/quran/hifz/voice-search`,
+    `POST /api/v1/quran/hifz/tests/{id}/questions/{qid}/answer` stay
+    proxied; the live stream `GET .../attempts/{id}/stream` is
+    registered explicitly as 503 `hifz_live_unavailable`.
+  - Tests: `rust/app/tests/wave4.rs` (24 tests, sqlite in-memory;
+    `wave4_pg_smoke` replays the critical path on local Postgres when
+    `WAVE2_PG_URL` is set). Cases: `rust/app-cases/wave4/` (15 cases).
+  - Data embedded from the project's own licensed files
+    (`rust/app/data/quran/`): Tanzil Uthmani text, bundled translations
+    (fa.rowwad, fa.taji) + tafsirs (fa.mokhtasar, fa.saadi), Torbat Jam
+    adhan table, generated recitation timings (ar.husary surahs 1, 67),
+    mushaf lines (for test passages). Surah 2 timings are in-progress
+    in Python and deliberately not served.
   - home: `GET /api/v1/home/sections`, `GET /api/v1/search`,
     `PUT /api/v1/admin/home/sections/{key}/data`
   - content: `GET /api/v1/content/items`,

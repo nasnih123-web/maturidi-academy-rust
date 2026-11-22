@@ -454,3 +454,177 @@ column is still written.
 Consequences: Chunk creation and add-to-rag work identically on
 sqlite and Postgres. Any future vector work must reintroduce the
 column deliberately, not by accident.
+
+## ADR-031: ASR stays proxied; the live stream answers an explicit 503 (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Hifz scoring needs sherpa-onnx (Zipformer) or faster-whisper
+(Whisper-quran) — native ASR models that cannot live inside the Rust
+binary (ADR-008). The four HTTP scoring endpoints (`POST
+/attempts/{id}/grade`, `grade-word`, `POST /voice-search`, `POST
+/tests/{id}/questions/{qid}/answer`) and the live WebSocket stream
+(`WS /attempts/{id}/stream`) all depend on them.
+Decision: The four HTTP endpoints are NOT registered natively; they
+fall through to the proxy fallback, so with a live Python origin they
+keep working exactly as before, and with a dead origin they answer
+502 `bad_gateway`. The WebSocket route IS registered, explicitly, as
+503 `hifz_live_unavailable` — the HTTP proxy (reqwest) cannot relay a
+WebSocket upgrade, so proxying it would silently break; an honest 503
+is better than a hanging upgrade. `GET /quran/hifz/status` honestly
+reports the selected engine as unavailable, with reason "موتور تشخیص
+گفتار در نسخهٔ Rust پیکربندی نشده است" (invalid engine id →
+available=false, reason "موتور انتخاب‌شده معتبر نیست"); map fields
+false/unavailable. ASR quality is never faked: no grade endpoint is
+native, so `HifzGradeWordOut.needs_review` is never emitted by Rust.
+Consequences: Hifz grading, voice search and the live stream require
+the Python origin until a sidecar exists (Wave 5/8). Everything else
+in hifz (attempts, peek, settings, listen position, stats, review,
+SRS, plans, dashboard, activity, suggested, tests except answer,
+mutashabihat, tasmi, purge) is native.
+
+## ADR-032: Test-passage sampling uses SplitMix64, not CPython's Mersenne Twister (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's `build_passages` samples mushaf-line starts with
+`random.Random(seed).sample(...)` (Mersenne Twister); the seed is the
+first 8 bytes of the test UUID, little-endian.
+Decision: Rust uses SplitMix64 with the same seed and the same wire
+shape (Fisher–Yates partial shuffle with rejection sampling). Sampled
+passages may therefore differ from Python's for the same test id; the
+seed, question count, lengths and prompt rules are identical.
+Consequences: Test questions are equivalent in distribution but not
+byte-identical to Python's. If exact parity is ever required, a
+Mersenne Twister implementation must be added deliberately.
+
+## ADR-033: tasmi8 unknown variant / unknown rating → 500 internal_error (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's `tasmi8_initial_state` and `tasmi_review_due_at`
+raise plain `ValueError` for an unknown variant / unknown rating, with
+no `APIError` conversion in the service — the request dies as a 500.
+Decision: Rust mirrors this exactly: unknown `variant` on tasmi8
+creation and unknown `rating` on `rate` return 500 `internal_error`.
+Consequences: Faithful to Python, including the upstream wart; a
+future product decision could map these to 422 instead.
+
+## ADR-034: Hifz data-purge rate limit is in-process (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's purge limiter is 3/hour per auth session via Redis
+when provisioned, else in-process.
+Decision: Rust keeps a `Mutex<HashMap>` sliding 3600 s window, limit
+3, keyed by session id falling back to user id — the same behaviour
+as Python when Redis is absent. The limiter runs before validation,
+so failed purge attempts consume quota, exactly like the Python
+decorator.
+Consequences: Quotas do not survive a restart and are not shared
+across processes; that matches the no-Redis Python behaviour.
+
+## ADR-035: `sync_changelog.seq` is MAX(seq)+1 (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `record_entity_change` (notes create/update/delete) needs a
+`seq` for the sync journal. Production Postgres allocates it from a
+real sequence via migrations; the test schema has no sequence.
+Decision: Rust allocates `seq` as `MAX(seq)+1` in one statement.
+Consequences: A concurrent-insert race could collide on the PK; this
+is a known limitation to revisit in Wave 7 when sync is fully ported.
+
+## ADR-036: No settings-version bump on custom-provider key write (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python bumps a settings version after `stage_setting`
+because it caches settings; Rust reads settings from the DB on every
+request.
+Decision: `PUT /quran/registry/custom-providers/{id}/key` stores the
+key via `stage_setting` and does not bump any version.
+Consequences: Key changes take effect immediately in Rust, same
+observable behaviour as Python after its bump.
+
+## ADR-037: Pydantic-vs-service validation order in test creation (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `POST /api/v1/quran/hifz/tests` validates in two layers:
+Pydantic schema ranges first, then service rules.
+Decision: Rust keeps the order — schema-level ranges
+(`question_count` 1–99, `time_limit_minutes` 1–60, surah 1–114) →
+422 `validation_error`; service-level checks (length, stop_rule,
+range) → domain codes `hifz_test_length` / `hifz_test_stop_rule` /
+`hifz_test_range`, in that order.
+Consequences: The same body gets the same code from Rust and Python.
+
+## ADR-038: Peek `kind` semantics are inferred, not observed (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `kind="word"` = `<` (next word), `kind="ayah"` = `<<` (rest
+of the ayah) is inferred from video iconography in the Python code;
+it was never observed live.
+Decision: Rust ports the Python semantics verbatim and records the
+uncertainty here, as Python does in its own comments.
+Consequences: If the user corrects the mapping, both codebases change
+together; nothing in Rust depends on the guess beyond the port.
+
+## ADR-039: Mutashabihat cache is computed once per process (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python keys its mutashabihat cache by the Tanzil file's
+mtime; the Rust copy is embedded with `include_str!` and static.
+Decision: Rust computes the phrase index once per process from the
+embedded text (`OnceLock`); no mtime key is needed.
+Consequences: The index never refreshes at runtime — it cannot,
+because the data is compiled in. A data update requires a rebuild,
+which is the honest equivalent of a file change + restart.
+
+## ADR-040: Float rounding is Rust half-away-from-zero, not Python banker's (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: ADR-024 already records this class of divergence for Wave 3
+(score rounding). Wave 4 has the same class: SM-2 ease is rounded to
+4 decimals and adhan times use Python `round()` (banker's).
+Decision: Rust uses its native `round()` (half away from zero) in
+`sm2_next` and in the adhan `_fmt` port (`py_round` reimplements
+banker's rounding for the adhan display path where the difference is
+visible in "HH:MM" output; SM-2 ease keeps Rust rounding).
+Consequences: SM-2 ease values can differ from Python in the last
+decimal in exact-half cases only; adhan times match Python.
+
+## ADR-041: Default provider editions are AlQuran Cloud — offline use needs bundled settings (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The built-in defaults are translations `en.sahih` /
+`fa.makarem`, tafsir `ar.muyassar` and reciter audio `ar.alafasy`,
+all served by AlQuran Cloud. A plain `GET /quran/surah/{n}` or
+`/quran/ayah/{s}/{a}` therefore makes a live AlQuran Cloud round-trip
+for translation/tafsir/audio, even though the text itself is
+self-hosted — exactly like Python.
+Decision: Rust mirrors this exactly; it does not silently fall back
+to bundled editions. The Wave 4 tests set bundled defaults
+(`quran.translations=["fa.rowwad"]`, `quran.tafsirs=["fa.mokhtasar"]`,
+`quran.reciters=[]`) or pass `?translation=fa.rowwad&tafsir=fa.mokhtasar`
+to stay offline. A call without bundled editions against an
+unreachable AlQuran Cloud answers 503 `quran_provider_unavailable`
+with `{"provider": "alquran_cloud"}`.
+Consequences: The default path needs the network in both codebases;
+offline operation is a settings choice, not a code change.
+
+## ADR-042: The Tanzil text prefixes every surah's first ayah with the basmala (finding, 2026-11-22)
+Status: accepted
+Context: In the bundled Tanzil Uthmani text, every surah's first ayah
+(except surah 9) begins with the basmala — e.g. `2|1` starts
+"بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ الٓمٓ" — and 27:30 contains it
+too. The 4-gram "بسم الله الرحمن الرحيم" therefore occurs 114 times.
+Decision: The mutashabihat group for that phrase reports 114
+occurrences; this is data, not a bug, and must not be "fixed" to 2.
+Consequences: The Wave 4 tests pin 114. Any future basmala handling
+(grading, live stream) must remember the basmala is part of the ayah
+text in this data file, unlike the printed mushaf where it is a
+separate heading.
+
+## ADR-043: TEST_SCHEMA `platform_settings.value` is JSONB, like production (bug found by Wave 4, 2026-11-22)
+Status: accepted
+Context: The Wave 4 Postgres smoke failed on the very first surah
+call with 500 `internal_error`. The cause: `get_setting` reads
+`platform_settings.value` as `serde_json::Value`, but TEST_SCHEMA
+declared the column `TEXT` while production declares it `JSONB`
+(`Mapped[dict] = mapped_column(JSONB)` in `models.py`). On sqlite
+the typeless store hides the mismatch; on Postgres sqlx refuses to
+decode a TEXT column as a JSON value. No earlier smoke caught it
+because the Wave 2/3 smokes never read a platform setting on
+Postgres (the calendar-theme setting read is a sqlite-only test).
+Decision: TEST_SCHEMA now declares `platform_settings.value JSONB`,
+matching production. `get_setting`/`stage_setting`/`encrypt_value`
+are unchanged — they already treat the value as a JSON envelope.
+Consequences: Settings round-trip on Postgres (verified by the Wave
+4 smoke). The same latent class (TEXT column read as JSON, or vice
+versa) should be checked whenever a new settings-backed feature is
+ported; the smoke suite must exercise at least one settings read on
+Postgres, which Wave 4 now does.
