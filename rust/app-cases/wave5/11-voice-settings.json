@@ -1,0 +1,21 @@
+{
+  "case": "admin voice.settings (stored values come back as raw strings, unset as typed defaults)",
+  "auth": "bearer",
+  "method": "GET",
+  "path": "/api/v1/admin/voice/settings",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "settings": {
+      "voice.stt_provider": "auto",
+      "voice.tts_provider": "none",
+      "voice.max_audio_seconds": 120,
+      "voice.max_audio_mb": 25,
+      "voice.tts_voice_fa": "default",
+      "voice.tts_voice_ar": "default",
+      "voice.tts_cloud_endpoint": "",
+      "voice.tts_cloud_api_key": "",
+      "voice.tts_cloud_model": "tts-1"
+    }
+  }
+}

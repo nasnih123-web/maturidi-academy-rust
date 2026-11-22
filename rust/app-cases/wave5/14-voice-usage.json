@@ -1,0 +1,12 @@
+{
+  "case": "admin voice.usage (cursor param is named cursor, not after)",
+  "auth": "bearer",
+  "method": "GET",
+  "path": "/api/v1/admin/voice/usage",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "items": [],
+    "next_cursor": null
+  }
+}

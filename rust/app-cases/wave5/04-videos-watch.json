@@ -1,0 +1,25 @@
+{
+  "case": "videos.watch (upload item: signed stream_url, playlist context, related, subtitle tracks)",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/videos/<uuid>",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "item": {
+      "id": "<uuid>",
+      "kind": "video"
+    },
+    "stream_url": "<signed-library-download-url>",
+    "playlist": {
+      "position": 1
+    },
+    "related": [],
+    "subtitles": [
+      {
+        "lang": "fa",
+        "url": "/api/v1/videos/<uuid>/subtitles/fa.vtt"
+      }
+    ]
+  }
+}

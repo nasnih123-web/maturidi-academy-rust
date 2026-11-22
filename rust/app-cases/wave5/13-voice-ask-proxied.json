@@ -1,0 +1,11 @@
+{
+  "case": "voice.ask stays proxied (needs the STT sidecar first)",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/voice/ask",
+  "body": "<multipart audio>",
+  "expected_status": 502,
+  "expected": {
+    "status": "bad_gateway"
+  }
+}

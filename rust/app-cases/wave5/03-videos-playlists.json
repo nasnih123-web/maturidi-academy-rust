@@ -1,0 +1,9 @@
+{
+  "case": "videos.playlists (published only, max 4 items each)",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/videos/playlists",
+  "body": null,
+  "expected_status": 200,
+  "expected": []
+}

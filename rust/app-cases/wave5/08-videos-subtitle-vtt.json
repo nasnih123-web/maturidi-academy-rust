@@ -1,0 +1,10 @@
+{
+  "case": "videos.subtitle VTT (raw text/vtt, no JSON envelope)",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/videos/<uuid>/subtitles/fa.vtt",
+  "body": null,
+  "expected_status": 200,
+  "expected_content_type": "text/vtt",
+  "expected": "WEBVTT"
+}

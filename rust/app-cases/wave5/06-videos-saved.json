@@ -1,0 +1,11 @@
+{
+  "case": "videos.saved (save is idempotent; any library kind may be saved)",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/videos/<uuid>/saved",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "saved": true
+  }
+}

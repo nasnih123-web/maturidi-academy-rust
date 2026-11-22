@@ -1,0 +1,11 @@
+{
+  "case": "videos.list cursor pagination (after + limit)",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/videos?limit=1",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "next_cursor": "<cursor>"
+  }
+}

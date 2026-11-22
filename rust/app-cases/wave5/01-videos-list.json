@@ -1,0 +1,12 @@
+{
+  "case": "videos.list (guest: public published videos only)",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/videos",
+  "body": null,
+  "expected_status": 200,
+  "expected": {
+    "items": [],
+    "next_cursor": null
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "case": "videos.progress PUT (duration kept when omitted on update)",
+  "auth": "bearer",
+  "method": "PUT",
+  "path": "/api/v1/videos/<uuid>/progress",
+  "body": {
+    "position_seconds": 42.5,
+    "duration_seconds": 120.0
+  },
+  "expected_status": 200,
+  "expected": {
+    "position_seconds": 42.5,
+    "duration_seconds": 120.0
+  }
+}

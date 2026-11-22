@@ -1,0 +1,13 @@
+{
+  "case": "videos.watch draft item -> 404 item_not_found (never 403)",
+  "auth": "none",
+  "method": "GET",
+  "path": "/api/v1/videos/<uuid>",
+  "body": null,
+  "expected_status": 404,
+  "expected": {
+    "error": {
+      "code": "item_not_found"
+    }
+  }
+}

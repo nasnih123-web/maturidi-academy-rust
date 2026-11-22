@@ -1,0 +1,19 @@
+{
+  "case": "admin videos.playlist create (LocalizedText needs fa+ar+en)",
+  "auth": "bearer",
+  "method": "POST",
+  "path": "/api/v1/admin/videos/playlists",
+  "body": {
+    "title": {
+      "fa": "مکتوبات",
+      "ar": "مکتوبات",
+      "en": "Maktubat"
+    }
+  },
+  "expected_status": 201,
+  "expected": {
+    "is_published": false,
+    "sort_order": 0,
+    "item_count": 0
+  }
+}
