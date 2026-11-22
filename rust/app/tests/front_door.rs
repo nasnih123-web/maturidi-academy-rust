@@ -18,6 +18,7 @@ fn test_config() -> Config {
         // Dead port: proves /health and /ready never touch the origin.
         origin_url: "http://127.0.0.1:9".to_string(),
         port: 8000,
+        ..Default::default()
     }
 }
 
@@ -50,7 +51,7 @@ async fn call_bytes(
 
 #[tokio::test]
 async fn health_returns_ok_and_env() {
-    let app = build_router(AppState::new(test_config()));
+    let app = build_router(AppState::new(test_config()).await);
     let req = Request::builder()
         .uri("/health")
         .body(Body::empty())
@@ -65,7 +66,7 @@ async fn ready_with_unreachable_db_returns_503_not_ready() {
     let mut config = test_config();
     // Connection-refused Postgres: DB probe fails fast, never panics.
     config.database_url = Some("postgres://127.0.0.1:1/nope".to_string());
-    let app = build_router(AppState::new(config));
+    let app = build_router(AppState::new(config).await);
     let req = Request::builder()
         .uri("/ready")
         .body(Body::empty())
@@ -87,7 +88,7 @@ async fn ready_with_unreachable_db_returns_503_not_ready() {
 async fn ready_with_sqlite_memory_returns_200_ready() {
     let mut config = test_config();
     config.database_url = Some("sqlite://:memory:".to_string());
-    let app = build_router(AppState::new(config));
+    let app = build_router(AppState::new(config).await);
     let req = Request::builder()
         .uri("/ready")
         .body(Body::empty())
@@ -107,7 +108,7 @@ async fn ready_with_sqlite_memory_returns_200_ready() {
 
 #[tokio::test]
 async fn ready_with_no_database_url_returns_503() {
-    let app = build_router(AppState::new(test_config()));
+    let app = build_router(AppState::new(test_config()).await);
     let req = Request::builder()
         .uri("/ready")
         .body(Body::empty())
@@ -161,7 +162,7 @@ async fn proxy_forwards_to_origin_and_returns_status_and_body() {
     let origin = start_mock_origin().await;
     let mut config = test_config();
     config.origin_url = origin;
-    let app = build_router(AppState::new(config));
+    let app = build_router(AppState::new(config).await);
 
     let req = Request::builder()
         .uri("/api/v1/health")
@@ -183,7 +184,7 @@ async fn proxy_preserves_method_headers_and_body() {
     let origin = start_mock_origin().await;
     let mut config = test_config();
     config.origin_url = origin;
-    let app = build_router(AppState::new(config));
+    let app = build_router(AppState::new(config).await);
 
     let req = Request::builder()
         .method("POST")
@@ -200,7 +201,7 @@ async fn proxy_preserves_method_headers_and_body() {
 
 #[tokio::test]
 async fn proxy_to_dead_origin_returns_502() {
-    let app = build_router(AppState::new(test_config()));
+    let app = build_router(AppState::new(test_config()).await);
     let req = Request::builder()
         .uri("/api/v1/health")
         .body(Body::empty())
