@@ -259,3 +259,198 @@ Decision:
   step boundary (`sleep_until_next_totp_step`).
 Consequences: `cargo test` is green on sqlite by default; the Postgres
 smoke runs whenever `WAVE2_PG_URL` is set.
+
+## ADR-018: Home search fatwa semantic boost is inactive (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's home search adds `0.3 * semantic` to fatwa hits only
+when the resolved embedding provider's name is not `"hash"`.
+Decision: In the Rust port the boost is inactive — no real embedding
+provider is ported in Wave 3 (see ADR-019), and the Python default
+provider is `"hash"`, which the Python code itself skips. The lexical
+scoring, ordering and response shape are otherwise exact.
+Consequences: Home search results match Python's behaviour with the
+default provider. If a real provider is ported later, the boost can be
+re-enabled behind the same condition.
+
+## ADR-019: Hash-only embedding provider; Backend B full scan; `embedding_vec` always NULL (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python resolves the embedding provider from the
+`ai.embedding_provider` setting (`"hash"` in dev/test,
+`"local_model"` — sentence-transformers/torch — in production when
+unset), and searches via pgvector (Backend A) or a full scan
+(Backend B) on SQLite.
+Decision:
+- The Rust port implements the hash provider only (`hash-trigram-v1`,
+  256-dim folding, `PROJECTION_ID="folding-v1"`), ported exactly from
+  `embeddings.py` (`rust/app/src/embeddings.rs`).
+- An unset `ai.embedding_provider` resolves to `"hash"` in **every**
+  environment — a deliberate deviation from Python's production
+  default `local_model`, which cannot run inside the Rust binary.
+  Any other resolved name returns 500 `internal_error` (the same
+  status Python produces when its provider fails to construct).
+- Search always uses the Backend B full scan (no pgvector / pg_trgm in
+  the Rust binary); scores are identical to Python's Backend B. On
+  Postgres, Python's Backend A may return a subset in edge cases
+  (candidate window `top_k*3`); the Rust full scan is a superset.
+- `embedding_vec` is always NULL in Rust (no pgvector binding); the
+  JSON `embedding` column carries the data.
+Consequences: `external_api` / `local_model` providers are a
+follow-up (Wave 7+). Verify, cluster matching, chunk creation and
+add-to-rag all work with the hash provider.
+
+## ADR-020: Path UUIDs parse to 422; chunk/audit UUID cursors fail with 500 (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: FastAPI path params typed `UUID` reject malformed values with
+422; Wave 2 routes used axum's `Path<Uuid>`, which answers 400.
+Python's chunk/audit list handlers call `UUID(cursor)` unguarded, so
+an invalid cursor reaches the generic handler as a 500.
+Decision:
+- Wave 3 routes take `Path<String>` and parse manually
+  (`validate::parse_path_uuid`) → 422 `validation_error`, faithful to
+  FastAPI.
+- Chunk/audit `after` cursors parse with `Uuid::from_str`; failure →
+  500 `internal_error`, faithful to Python's unguarded call.
+Consequences: Known inconsistency with Wave 2's `Path<Uuid>` (400) —
+to be aligned in a later wave, not in Wave 3.
+
+## ADR-021: `PageUpdate.slug_immutable` is unreachable — verified, not ported (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: `cms_service.update_item` raises 422 `slug_immutable` when
+`"slug" in data` for pages, but `PageUpdate` (cms_schemas.py:117-122)
+has no `slug` field and no `model_config` / `extra='forbid'` is set
+anywhere in the content schemas, so Pydantic's default
+`extra='ignore'` drops a client-sent `slug` before the check.
+Decision: The Rust port ignores unknown body fields identically and
+never emits `slug_immutable`.
+Consequences: A client sending `slug` on a page PATCH gets a normal
+200 in both Python and Rust.
+
+## ADR-022: Ingest trigger always reports `enqueued=false` (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's `trigger_ingestion` best-effort enqueues the ARQ job
+`ingest_knowledge_run` on queue `"ai"` (Redis); on any exception the
+run stays `queued` with `enqueued=false`.
+Decision: The Rust port never enqueues (no ARQ client in Wave 3) and
+always stores `stats={"run_config": {...}, "enqueued": false}` with
+`status="queued"`, emitting `ingestion.run_triggered`. This is a
+legitimate Python code path (Redis down), not an error.
+Consequences: Ingestion runs created via the Rust API stay `queued`
+until the ARQ worker path is ported (Wave 7 worker work).
+
+## ADR-023: Trusted-source check error-class mapping is approximate (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python returns the httpx exception class name on a failed
+check (e.g. `ConnectError`, `TimeoutException`); Rust uses reqwest.
+Decision: Map reqwest errors approximately — connect failure →
+`ConnectError`, timeout → `TimeoutException`, anything else →
+`RequestError` — with the same 200 response shape
+`{ok: false, latency_ms, error}` and no DB write.
+Consequences: The `error` string may differ from Python's for exotic
+failures (e.g. TLS errors); the shape and status are identical.
+
+## ADR-024: SQL/validation fidelity notes (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Small places where the two engines or the two validation
+stacks differ.
+Decision:
+- ILIKE: sqlite has no `ILIKE`; Rust uses
+  `LOWER(CAST(col AS TEXT)) LIKE ?` with a pre-lowered `%q%` pattern
+  on both backends. `%`/`_` in `q` stay wildcards, exactly like
+  Python (which does no escaping).
+- Length caps where Python would 500 via the DB varchar constraint:
+  page slug max 160, nav url max 1024, banner placement max 64,
+  `topic_category` max 64, `madhab_scope` max 16 → 422 in Rust.
+- Score rounding: Rust `(x * 10000.0).round() / 10000.0` rounds half
+  away from zero; Python `round(x, 4)` uses banker's rounding — a tiny
+  edge difference on exact .00005 boundaries.
+Consequences: No behavioural difference in normal use; the 422s are
+strictly more helpful than Python's 500s.
+
+## ADR-025: Telegram hooks in submission transitions are skipped (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python calls `notify_review_request` (on `in_review`) and
+`auto_publish_if_policy` (on `published`) after committing a
+submission transition, inside a try/except that swallows all errors.
+Decision: The Rust port performs the transition, its side effects
+(`updated_at`, `reviewed_by/at`, `published_at`, `version` bump,
+domain event) and nothing else. Telegram distribution belongs to
+Wave 7.
+Consequences: No Telegram notification is sent from the Rust API for
+submission transitions; the transition itself is identical.
+
+## ADR-026: `POST /api/v1/fatwa/ask` stays proxied (assistant/mufti separate) (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The ask route (incl. its SSE variant) is the AI assistant
+surface: sessions, messages, LLM provider, streaming. The task scope
+says the assistant/mufti is separate — do not touch it.
+Decision: `POST /api/v1/fatwa/ask` is NOT registered in Rust; it falls
+through to the proxy. `fatwa_sessions` / `fatwa_messages` tables exist
+in TEST_SCHEMA but no Wave 3 route reads or writes them.
+Consequences: Ask traffic keeps working through the Python server
+until the assistant is ported (Wave 5+).
+
+## ADR-027: Quiz quota — in-process windows, daily count compared in Rust (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's `check_quota` (ask + quiz/generate) uses in-process
+sliding windows (per-minute, keyed `user:<id>` / `ip:<ip>`, per
+endpoint) and a DB count of `ai_usage_log` rows since UTC midnight
+for authenticated users; guests use an in-process 24 h window. The
+per-minute slot is consumed even when the daily check then fails.
+Decision: Rust mirrors this with process-local statics
+(`QUOTA_MINUTE` / `QUOTA_DAILY`) and a DB count whose timestamps are
+compared in Rust, never in SQL (Wave 2 guidance on the two engines'
+timestamp storage). Settings `ai.rate_per_minute` (default 5) and
+`ai.daily_quota_per_user` (default 20) are read via
+`get_typed_setting` with Python's `int()` truncation semantics.
+Consequences: Quota state is per-process (not shared across
+replicas), exactly like Python.
+
+## ADR-028: Postgres type strictness — INTEGER columns read as i32, timestamps bound as DateTime (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: The Wave 3 Postgres smoke test caught two failures that
+sqlite silently accepts. (1) sqlx on Postgres cannot decode an INT4
+(`INTEGER`) column as i64 — `row_to_dict` reading `version` as i64
+made every CMS create 500 on Postgres while passing on sqlite.
+(2) A `text` parameter is rejected for a TIMESTAMPTZ column
+(Postgres error 42804); the test helper bound RFC3339 strings for
+`created_at`, which sqlite accepted.
+Decision: Every read of an `INTEGER` column uses i32 (`version`,
+`hijri_month/day`, `sort_order`, `priority`, `correct_option`,
+`view_count`/`share_count`, `surah`/`ayah`, `donations.amount`
+which is read as i32 then cast to f64); `COUNT(*)` reads stay i64
+because Postgres returns BIGINT. Every timestamp bind uses
+`DateTime<Utc>` (`Arg::Dt`), never an RFC3339 string. The same fix
+was applied to the latent Wave 2 sites (`routes_users.rs` ayah notes
++ donations amount) since they share the bug class.
+Consequences: The full suite (incl. both Postgres smoke tests) is
+green on real Postgres. New code must read INTEGER as i32; a future
+lint or review check should catch i64 reads of INTEGER columns.
+
+## ADR-029: No HTTP route approves a quiz question in Python (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Python's `quiz/generate` requires quiz questions with
+`workflow_status` in `('approved', 'published')`, but there is no
+HTTP route that moves a quiz question out of `draft` (only
+`POST /api/v1/admin/fatwa/quiz/questions`, which creates it as
+`draft`). Verified by grepping `fatwa/router.py` and `service.py`.
+Decision: Rust mirrors Python exactly — no quiz-question status
+route is added. Over pure HTTP, `quiz/generate` therefore answers
+404 `no_quiz_questions` until a question is approved out-of-band
+(direct DB), the same as Python. The Wave 3 tests seed the approved
+state directly in the DB and then exercise generate/submit over HTTP.
+Consequences: Quiz is ported faithfully, including the upstream gap;
+if the user wants a quiz-approval endpoint, that is a product
+decision for a later wave, not a silent addition here.
+
+## ADR-030: `embedding_vec` is never named in Rust INSERTs (decided by Dash per ADR-010, 2026-11-22)
+Status: accepted
+Context: Per ADR-019 `embedding_vec` is always NULL in Rust and
+`TEST_SCHEMA` deliberately omits the column (no pgvector in sqlite).
+Both chunk INSERTs still listed `embedding_vec` (with a NULL literal),
+which 500s on sqlite ("no such column") while working on Postgres.
+Decision: Rust INSERTs never name `embedding_vec`; the column keeps
+its production default (NULL) on Postgres. The JSON `embedding`
+column is still written.
+Consequences: Chunk creation and add-to-rag work identically on
+sqlite and Postgres. Any future vector work must reintroduce the
+column deliberately, not by accident.

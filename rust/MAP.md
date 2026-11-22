@@ -86,7 +86,7 @@ The honest path for a pure Rust server is:
 - Confirm how to treat the hard dependencies above (sidecar / external service / reimplement / drop).
 - Confirm equivalence bar for floats, error text, validation errors (Pydantic errors will differ in Rust).
 
-## Port progress — Wave 1 + Wave 2 native (2026-11-22)
+## Port progress — Wave 1 + Wave 2 + Wave 3 native (2026-11-22)
 
 - Wave 1 (done, verified green locally): Axum front door, `GET /health`,
   `GET /ready`, proxy fallback to `ORIGIN_URL`. See ADR-007 / ADR-013.
@@ -95,6 +95,54 @@ The honest path for a pure Rust server is:
   are answered natively in Rust; everything else still proxies. Kill switch
   per module: `RUST_ANYTHING_UNIT_<META|ACTIVITY|API_KEYS|USERS|AUTH>=original`
   falls back to the Python origin. Details: ADR-014 – ADR-017.
+- Wave 3 (done, verified green locally — `cargo fmt`, `clippy -D warnings`,
+  `cargo test` incl. Postgres smoke): home, content, articles, fatwa are
+  answered natively in Rust; everything else still proxies. Kill switch per
+  module: `RUST_ANYTHING_UNIT_<HOME|CONTENT|ARTICLES|FATWA>=original` falls
+  back to the Python origin. Details: ADR-018 – ADR-030.
+  - home: `GET /api/v1/home/sections`, `GET /api/v1/search`,
+    `PUT /api/v1/admin/home/sections/{key}/data`
+  - content: `GET /api/v1/content/items`,
+    `GET /api/v1/content/items/{content_type}/{item_id}/preview`,
+    `GET /api/v1/content/policies/{content_type}/{item_id}`,
+    `GET|POST /api/v1/content/{resource}`,
+    `GET|PATCH|DELETE /api/v1/content/{resource}/{item_id}`,
+    `POST /api/v1/content/{resource}/{item_id}/transition`,
+    `GET /api/v1/content/public/nav`, `/banners`, `/announcements`,
+    `/pages`, `/pages/slug/{slug}`, `/events`, `/quotes`, `/calendar/theme`
+  - articles: `GET /api/v1/articles`, `/categories`, `/{slug}/meta`,
+    `/{slug}`, `POST /{slug}/share`, `GET|POST /api/v1/admin/articles`,
+    `PUT /{article_id}`, `PATCH /{article_id}/status`,
+    `GET|POST /api/v1/admin/articles/categories`,
+    `PUT|DELETE /{category_id}`
+  - fatwa: `GET /api/v1/fatwa/categories`, `/topics`, `/topics/categories`,
+    `/topics/{id}`, `POST /topics/{id}/share`, `GET /compare/{id}`,
+    `POST /quiz/generate`, `/quiz/submit`, `POST /api/v1/verify/check`,
+    `GET|POST /api/v1/admin/fatwa/chunks`,
+    `PATCH /api/v1/admin/fatwa/chunks/{id}/status`,
+    `POST /api/v1/admin/fatwa/ingest`, `GET /ingest/{run_id}`,
+    `POST|GET /api/v1/admin/fatwa/topics`, `PATCH /topics/{id}/status`,
+    `PUT /topics/{id}`, `POST /topics/{id}/positions`,
+    `POST /api/v1/admin/fatwa/positions`,
+    `PATCH /positions/{id}/status`,
+    `POST /api/v1/admin/fatwa/quiz/questions`,
+    `GET|POST /api/v1/admin/fatwa/categories`, `PUT|DELETE /{id}`,
+    `GET|POST /api/v1/admin/fatwa/trusted-sources`,
+    `PATCH|DELETE /{id}`, `POST /{id}/check`,
+    `GET /api/v1/admin/fatwa/audit`,
+    `POST|GET /api/v1/fatwa/submissions`, `GET /{id}`,
+    `POST /{id}/submit|approve|publish|reject`, `POST /{id}/add-to-rag`,
+    `POST /api/v1/fatwa/questions`, `GET /api/v1/fatwa/clusters`,
+    `GET /{id}`, `POST /{id}/answer`,
+    `GET /api/v1/fatwas/saved`, `GET|POST|DELETE /{id}/saved`
+  - `POST /api/v1/fatwa/ask` is intentionally NOT native (assistant/mufti,
+    ADR-026) and stays proxied.
+  - Tests: `rust/app/tests/wave3.rs` (20 tests, sqlite in-memory;
+    `wave3_pg_smoke` replays the critical path on local Postgres when
+    `WAVE2_PG_URL` is set). Cases: `rust/app-cases/wave3/` (14 cases).
+  - Not yet ported in Wave 3 (stubs / later waves): ARQ ingest worker
+    (ingest trigger always `enqueued=false`, ADR-022), real embedding
+    providers (hash-only, ADR-019), Telegram hooks (ADR-025).
   - meta: `GET /api/v1/themes/active`, `GET /api/v1/settings/public`,
     `GET /api/v1/i18n/detect`
   - activity: `POST /api/v1/activity/events`
