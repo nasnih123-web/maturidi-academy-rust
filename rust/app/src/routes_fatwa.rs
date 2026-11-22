@@ -2617,21 +2617,26 @@ async fn submission_transition(
     );
     db.execute(&sql, &args).await?;
     let event_type = match target {
-        "in_review" => "fatwa.submission_submitted",
-        "approved" => "fatwa.submission_approved",
-        "published" => "fatwa.submission_published",
-        "rejected" => "fatwa.submission_rejected",
-        "archived" => "fatwa.submission_archived",
-        _ => "fatwa.submission_updated",
+        "in_review" => Some("fatwa.submission_submitted"),
+        "approved" => Some("fatwa.submission_approved"),
+        "published" => Some("fatwa.submission_published"),
+        "rejected" => Some("fatwa.submission_rejected"),
+        "archived" => Some("fatwa.submission_archived"),
+        // Python `_TRANSITION_EVENTS` has no entry for `draft` (or any other
+        // unmapped target): no domain event is emitted. The content-center
+        // path mirrors this too (ACC-04, resolved at the Wave 7 merge).
+        _ => None,
     };
-    emit_event(
-        db,
-        "fatwa_submission",
-        &id.to_string(),
-        event_type,
-        json!({ "actor_id": ctx.user.id.to_string(), "to": target }),
-    )
-    .await?;
+    if let Some(event_type) = event_type {
+        emit_event(
+            db,
+            "fatwa_submission",
+            &id.to_string(),
+            event_type,
+            json!({ "actor_id": ctx.user.id.to_string(), "to": target }),
+        )
+        .await?;
+    }
     // Telegram hooks are best-effort and swallowed in Python too —
     // skipped in Rust (see module docs).
     let row = fetch_submission_by_id(db, id).await?;
