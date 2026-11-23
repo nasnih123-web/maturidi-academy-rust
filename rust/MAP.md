@@ -584,9 +584,7 @@ exist but nothing enforces them.
   inside sqlx 0.8; the sqlx 0.9 upgrade is a PR-3 open item). The first
   audit also surfaced chrono RUSTSEC-2026-0543 as a warning only (no
   fixed upgrade; recorded in ADR-152, no ignore needed).
-- **Alembic (ADR-151):** the original repo is checked out at the
-  locked SHA `5d1cb02…` (read-only) and `scripts/alembic-check.sh`
-  asserts single head `f2a3b4c5d6e7`, runs `alembic upgrade head`,
+- **Alembic (ADR-151, fixed by ADR-155):** the original repo is checked out at main `9154d17` (read-only) and the locked base is recreated by merging PR #193 + #194 — the locked-base merge commit `5d1cb02` was never pushed and cannot be checked out by SHA. `scripts/alembic-check.sh` proves the checkout is the locked base by TREE hash (`73422149…`, ADR-155), then asserts single head `f2a3b4c5d6e7`, runs `alembic upgrade head`,
   verifies version row + `vector`/`pg_trgm` + 120 tables (119 app +
   `alembic_version`), then serves the Rust release binary's /ready
   against the migrated schema. The same script runs locally.
