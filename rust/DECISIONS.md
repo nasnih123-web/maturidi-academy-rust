@@ -1339,3 +1339,12 @@ Decision:
 - `scripts/alembic-check.sh` proves the checkout is the locked base by TREE hash (`LOCKED_TREE=73422149c202d8b4e0a4a1c0bcc8dba3f79239f0`), not commit SHA: a merge of the same parents is content-identical, so its tree hash must match. The script's old `LOCKED_BASE_SHA` assertion is replaced, not kept alongside.
 - This corrects ADR-151's checkout mechanism; ADR-151's assertions (single head `f2a3b4c5d6e7`, 50 revisions, 120 tables, `/ready` against the migrated schema) are unchanged. Verified locally: the script passes against the `rust-base` checkout (same tree) and the CI merge reproduces that tree.
 Consequences: the `alembic` gate is reproducible in CI without ever writing to the original repo. If either PR head moves on GitHub, the merge reproduces a different tree and the gate fails honestly instead of silently testing the wrong base.
+
+## ADR-156: Two CI workflow bugs found by the gates themselves (decided by Dash per ADR-010, 2026-11-23)
+Status: accepted
+Context: PR-2's first CI runs failed before any test ran, twice, for workflow-file reasons — not code reasons. (1) The `rust` job had an `env:` key whose body was only comments, which YAML parses as `env: null`; GitHub Actions rejects a null `env` mapping, so the whole workflow failed instantly with zero jobs. (2) Both Postgres services declared `POSTGRES_PASSWORD: <redacted>` — a literal placeholder, not a password — while every client URL used password `postgres`, so the `alembic` job (and the `rust` job's PG smokes) failed with `password authentication failed for user "postgres"`.
+Decision:
+- Never leave an `env:` (or any mapping) key with only comments in a workflow file: either give it real entries or delete the key and keep the explanation as a plain comment. Validate with `python3 -c "yaml.safe_load(...)"` and check that no job's `env` is `None`.
+- Never write a placeholder as a credential value: CI test databases use the same throwaway credential as the local test setup (`postgres` / `postgres`), stated plainly in the workflow. The services are ephemeral and hold no real data.
+- Both bugs were found by CI itself (the gates doing their job) and fixed in the PR-2 branch before merge; neither was papered over locally.
+Consequences: the four jobs now actually run. Any future workflow edit gets a YAML-parse check plus a grep for placeholder values before pushing.
