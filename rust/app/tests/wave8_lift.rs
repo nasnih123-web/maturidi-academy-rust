@@ -264,11 +264,33 @@ async fn serve(router: Router) -> SocketAddr {
 
 // ============================ minimal WS client ============================
 
+#[derive(Debug)]
 enum Frame {
     Text(String),
     Close(u16),
     Ping(Vec<u8>),
     Other,
+}
+
+/// Outcome of reading one frame: `next_frame`'s `None` conflates a
+/// timeout with EOF on the socket (ADR-167).
+#[derive(Debug)]
+enum FrameOutcome {
+    Frame(Frame),
+    Timeout,
+    Eof,
+}
+
+/// Outcome of reading one text frame (ADR-167): `next_text`'s `None`
+/// conflates a timeout with a close frame / EOF, which hid which
+/// failure mode fired when a wait gave up in CI.
+#[derive(Debug)]
+enum TextOutcome {
+    Text(String),
+    /// Server close frame (with its code) or EOF on the socket.
+    Closed(Option<u16>),
+    /// No frame arrived within `timeout`.
+    Timeout,
 }
 
 struct WsClient {
@@ -387,12 +409,22 @@ impl WsClient {
 
     /// Next frame, auto-replying to WS-level pings. `None` on timeout.
     async fn next_frame(&mut self, timeout: Duration) -> Option<Frame> {
+        match self.next_frame_outcome(timeout).await {
+            FrameOutcome::Frame(frame) => Some(frame),
+            _ => None,
+        }
+    }
+
+    /// Like `next_frame`, but distinguishes the three ways the read can
+    /// end without a frame (ADR-167): `next_frame`'s `None` conflates a
+    /// timeout with EOF on the socket, which hid which failure mode
+    /// fired when a wait gave up in CI.
+    async fn next_frame_outcome(&mut self, timeout: Duration) -> FrameOutcome {
         loop {
-            let frame = tokio::time::timeout(timeout, self.read_frame())
-                .await
-                .ok()??;
-            match frame {
-                Frame::Ping(data) => {
+            match tokio::time::timeout(timeout, self.read_frame()).await {
+                Err(_) => return FrameOutcome::Timeout,
+                Ok(None) => return FrameOutcome::Eof,
+                Ok(Some(Frame::Ping(data))) => {
                     // Client frames must be masked.
                     let mask = [0x12, 0x34, 0x56, 0x78];
                     let mut pong = vec![0x8au8, 0x80 | (data.len() as u8)];
@@ -402,7 +434,7 @@ impl WsClient {
                     }
                     let _ = self.stream.write_all(&pong).await;
                 }
-                other => return Some(other),
+                Ok(Some(frame)) => return FrameOutcome::Frame(frame),
             }
         }
     }
@@ -414,6 +446,22 @@ impl WsClient {
                 Frame::Text(t) => return Some(t),
                 Frame::Close(_) => return None,
                 _ => {}
+            }
+        }
+    }
+
+    /// Like `next_text`, but distinguishes timeout / close / EOF instead
+    /// of collapsing them into one `None` (ADR-167).
+    async fn next_text_outcome(&mut self, timeout: Duration) -> TextOutcome {
+        loop {
+            match self.next_frame_outcome(timeout).await {
+                FrameOutcome::Frame(Frame::Text(t)) => return TextOutcome::Text(t),
+                FrameOutcome::Frame(Frame::Close(code)) => {
+                    return TextOutcome::Closed(Some(code));
+                }
+                FrameOutcome::Frame(_) => {}
+                FrameOutcome::Timeout => return TextOutcome::Timeout,
+                FrameOutcome::Eof => return TextOutcome::Closed(None),
             }
         }
     }
@@ -435,18 +483,72 @@ impl WsClient {
     }
 }
 
+/// One log line when a wait helper gives up (ADR-167): which failure
+/// path fired (TIMEOUT / STREAM ENDED / UNPARSEABLE) and after how
+/// long. Test output is captured by the harness and shown only when
+/// the test fails, so this is silent on green runs and a measurement
+/// on red ones.
+fn log_wait_gave_up(
+    helper: &str,
+    wanted: &str,
+    outcome: &str,
+    started: tokio::time::Instant,
+    timeout: Duration,
+) {
+    eprintln!(
+        "[{helper}] {outcome} after {:?} waiting for {wanted} (budget {timeout:?})",
+        started.elapsed()
+    );
+}
+
 /// Read text messages until one parses as JSON with `"type": "event"`
 /// and the expected `event_type` — server `{"type":"ping"}` frames
 /// are answered with `{"type":"pong"}` on the way.
+///
+/// ADR-167: the three ways this can give up (deadline expiry, stream
+/// ended early, unparseable frame) used to collapse into one `None`,
+/// which hid the failure mode in CI — each path now logs its reason
+/// and elapsed time. Budget and assertions unchanged.
 async fn wait_event(client: &mut WsClient, event_type: &str, timeout: Duration) -> Option<Value> {
-    let deadline = tokio::time::Instant::now() + timeout;
+    let started = tokio::time::Instant::now();
+    let wanted = format!("event_type {event_type:?}");
+    let deadline = started + timeout;
     loop {
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         if left.is_zero() {
+            log_wait_gave_up("wait_event", &wanted, "TIMEOUT", started, timeout);
             return None;
         }
-        let text = client.next_text(left).await?;
-        let value: Value = serde_json::from_str(&text).ok()?;
+        let text = match client.next_text_outcome(left).await {
+            TextOutcome::Text(t) => t,
+            TextOutcome::Closed(code) => {
+                log_wait_gave_up(
+                    "wait_event",
+                    &wanted,
+                    &format!("STREAM ENDED (close code {code:?})"),
+                    started,
+                    timeout,
+                );
+                return None;
+            }
+            TextOutcome::Timeout => {
+                log_wait_gave_up("wait_event", &wanted, "TIMEOUT", started, timeout);
+                return None;
+            }
+        };
+        let value: Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                log_wait_gave_up(
+                    "wait_event",
+                    &wanted,
+                    &format!("UNPARSEABLE frame: {e}; frame (first 200 chars): {text:.200}"),
+                    started,
+                    timeout,
+                );
+                return None;
+            }
+        };
         if value["type"] == "ping" {
             client.send_text(r#"{"type":"pong"}"#).await;
             continue;
@@ -463,19 +565,52 @@ async fn wait_event(client: &mut WsClient, event_type: &str, timeout: Duration) 
 /// and the server's ack, and server `{"type":"ping"}` frames (answered
 /// with `{"type":"pong"}`). The poller ticks every second and can land
 /// mid-handshake, so a bare "next frame" read races with it (ADR-165).
+///
+/// Same ADR-167 failure-path logging as `wait_event`.
 async fn wait_frame_type(
     client: &mut WsClient,
     frame_type: &str,
     timeout: Duration,
 ) -> Option<Value> {
-    let deadline = tokio::time::Instant::now() + timeout;
+    let started = tokio::time::Instant::now();
+    let wanted = format!("frame_type {frame_type:?}");
+    let deadline = started + timeout;
     loop {
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         if left.is_zero() {
+            log_wait_gave_up("wait_frame_type", &wanted, "TIMEOUT", started, timeout);
             return None;
         }
-        let text = client.next_text(left).await?;
-        let value: Value = serde_json::from_str(&text).ok()?;
+        let text = match client.next_text_outcome(left).await {
+            TextOutcome::Text(t) => t,
+            TextOutcome::Closed(code) => {
+                log_wait_gave_up(
+                    "wait_frame_type",
+                    &wanted,
+                    &format!("STREAM ENDED (close code {code:?})"),
+                    started,
+                    timeout,
+                );
+                return None;
+            }
+            TextOutcome::Timeout => {
+                log_wait_gave_up("wait_frame_type", &wanted, "TIMEOUT", started, timeout);
+                return None;
+            }
+        };
+        let value: Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                log_wait_gave_up(
+                    "wait_frame_type",
+                    &wanted,
+                    &format!("UNPARSEABLE frame: {e}; frame (first 200 chars): {text:.200}"),
+                    started,
+                    timeout,
+                );
+                return None;
+            }
+        };
         if value["type"] == "ping" {
             client.send_text(r#"{"type":"pong"}"#).await;
             continue;
@@ -492,15 +627,48 @@ async fn wait_frame_type(
 /// of the same event can arrive before the server's replay of it, and
 /// a replayed duplicate can arrive after the live one — either order
 /// satisfies the wait, and the next wait skips the duplicate).
+///
+/// Same ADR-167 failure-path logging as `wait_event`.
 async fn wait_event_id(client: &mut WsClient, event_id: &str, timeout: Duration) -> Option<Value> {
-    let deadline = tokio::time::Instant::now() + timeout;
+    let started = tokio::time::Instant::now();
+    let wanted = format!("event_id {event_id:?}");
+    let deadline = started + timeout;
     loop {
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         if left.is_zero() {
+            log_wait_gave_up("wait_event_id", &wanted, "TIMEOUT", started, timeout);
             return None;
         }
-        let text = client.next_text(left).await?;
-        let value: Value = serde_json::from_str(&text).ok()?;
+        let text = match client.next_text_outcome(left).await {
+            TextOutcome::Text(t) => t,
+            TextOutcome::Closed(code) => {
+                log_wait_gave_up(
+                    "wait_event_id",
+                    &wanted,
+                    &format!("STREAM ENDED (close code {code:?})"),
+                    started,
+                    timeout,
+                );
+                return None;
+            }
+            TextOutcome::Timeout => {
+                log_wait_gave_up("wait_event_id", &wanted, "TIMEOUT", started, timeout);
+                return None;
+            }
+        };
+        let value: Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                log_wait_gave_up(
+                    "wait_event_id",
+                    &wanted,
+                    &format!("UNPARSEABLE frame: {e}; frame (first 200 chars): {text:.200}"),
+                    started,
+                    timeout,
+                );
+                return None;
+            }
+        };
         if value["type"] == "ping" {
             client.send_text(r#"{"type":"pong"}"#).await;
             continue;
@@ -1007,8 +1175,22 @@ async fn wave8_pg_smoke() {
     // PG query + broadcast can stall past 5 s on a loaded CI runner
     // (three CI failures of exactly this wait), so the budget is 3x
     // the failing one with ~330x headroom over the measured latency.
-    let got = wait_event(&mut client, "user.login", Duration::from_secs(15))
-        .await
-        .expect("live event on pg");
+    // ADR-167: the wait still failed in CI twice more at 15 s, and
+    // `wait_event` now logs which failure path fired and after how
+    // long — the elapsed time here is the second measurement, so the
+    // next CI log shows the wait's own duration even if the helper
+    // line is missed.
+    let wait_started = tokio::time::Instant::now();
+    let got = wait_event(&mut client, "user.login", Duration::from_secs(15)).await;
+    eprintln!(
+        "[wave8_pg_smoke] live-event wait finished after {:?}: {}",
+        wait_started.elapsed(),
+        if got.is_some() {
+            "matched"
+        } else {
+            "no event (see the [wait_event] line above)"
+        }
+    );
+    let got = got.expect("live event on pg");
     assert_eq!(got["event_id"], json!(event_id.to_string()));
 }
