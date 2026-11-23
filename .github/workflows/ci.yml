@@ -4,9 +4,63 @@ on:
   push:
   pull_request:
 
+# Merge gates (Wave 9 PR-2, ADR-149/150/151/153/154). All four jobs
+# must pass for a PR to merge — branch protection requires the checks
+# `rust`, `redis`, `docker` and `alembic` on main (a manual
+# repo-settings follow-up; this file cannot enable it — see
+# rust/MAP.md, Wave 9 PR-2). No step in this file swallows its exit
+# code: no `|| true`, no `continue-on-error`.
+#
+# What each job proves that a local run cannot:
+# - `rust`: the Postgres smokes run against a real pgvector service
+#   (locally they are skipped unless the developer wires them up).
+# - `redis`: the wave9_pr2 Redis tests run against a real Redis
+#   service. It is a SEPARATE job on purpose (ADR-154): a Redis
+#   service in the `rust` job would be reachable at localhost:6379,
+#   which is exactly the default redis_url the test configs use, so
+#   every binary would share the auth rate-limit counter and the suite
+#   would 429 itself.
+# - `docker`: the first-ever build of the repo Dockerfile.
+# - `alembic`: the locked Python migrations actually upgrade a real
+#   Postgres, and the Rust binary's /ready answers against that schema.
+
 jobs:
   rust:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        # The original compose uses this image (pgvector/pgvector:pg16);
+        # it is postgres:16 plus the vector extension — pg_trgm ships in
+        # the postgres base image (ADR-149). The service user is the
+        # postgres superuser, so the migrations' CREATE EXTENSION works.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: <redacted>
+          POSTGRES_DB: maturidi_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      # NO Redis service in this job, on purpose (ADR-154). Most test
+      # configs use Config::default(), whose redis_url is
+      # redis://localhost:6379/0 — a live Redis on that port makes every
+      # binary share the auth rate-limit counter (same test IP) and the
+      # suite 429s itself (proven locally, twice). Redis coverage lives
+      # in the separate `redis` job below. Likewise REDIS_URL is never
+      # set here: it would not even help, because the test configs do
+      # not read the environment.
+      #
+      # Postgres is deliberately NOT wired here either. The PG smokes
+      # share one database and must run one binary at a time (each
+      # smoke drops and re-creates the schema); with WAVE2_PG_URL set
+      # globally, plain `cargo test` would run them in parallel and
+      # they would clobber each other's schema. The sequential step
+      # below is the only place WAVE2_PG_URL is set.
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -17,5 +71,123 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
-      - name: Tests
+      - name: Release build
+        run: cargo build --release -p maturidi-api-rs --locked
+      - name: Tests (SQLite)
         run: cargo test
+      - name: PostgreSQL smoke tests (sequential)
+        env:
+          WAVE2_PG_URL: postgres://postgres:postgres@127.0.0.1:5432/maturidi_test
+        run: |
+          for t in wave2 wave3 wave4 wave5 wave6 wave7_admin wave7_admin_content wave7_finance wave7_places_widgets wave7_social wave7_sync_telegram wave8 wave8_lift wave8_projects wave9_pr1 wave9_pr2; do
+            echo "=== $t ==="
+            cargo test --test "$t" -- --test-threads=1 pg_smoke
+          done
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Cargo audit
+        # Fails the run on any RUSTSEC advisory affecting this tree
+        # (cargo-audit's default), except the two named in ADR-152:
+        # RUSTSEC-2023-0071 (rsa via sqlx-mysql) and RUSTSEC-2026-0459
+        # (libsqlite3-sys) have no patch upgrade inside sqlx 0.8 — the
+        # fix needs a sqlx minor upgrade, tracked for PR-3. No other
+        # --ignore is granted: any new advisory fails the run.
+        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0459
+
+  redis:
+    # Redis tests (ADR-154). A job of its own, so the Redis service is
+    # never reachable from the `rust` job's plain `cargo test` step.
+    # Runs only the wave9_pr2 binary: its six tests (PING, SET/GET,
+    # RateLimiter, /ready live/dead, PG smoke) use per-process unique
+    # keys and their own limiter instances. The PG smoke skips here —
+    # WAVE2_PG_URL is unset in this job — and runs in the `rust` job's
+    # sequential step instead.
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - name: Redis tests (wave9_pr2)
+        env:
+          REDIS_URL: redis://127.0.0.1:6379/0
+        run: cargo test --test wave9_pr2
+
+  docker:
+    # First-ever build of the repo Dockerfile (ADR-150). Builds exactly
+    # what the Dockerfile builds — no second Dockerfile, no push. The
+    # SBOM is generated from the built image (OS packages + Rust binary)
+    # and uploaded as an artifact.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: maturidi-api-rs:ci
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+      - name: Generate SBOM
+        run: syft maturidi-api-rs:ci -o spdx-json=sbom.spdx.json
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+
+  alembic:
+    # Locked-base migration check (ADR-151). Checks out the ORIGINAL
+    # repo at the locked SHA (read-only), runs its Alembic migrations
+    # against a pgvector Postgres service, and proves the Rust binary's
+    # /ready against the migrated schema. Everything it asserts lives in
+    # scripts/alembic-check.sh so the same check runs locally.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: <redacted>
+          POSTGRES_DB: alembic_check
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      LOCKED_BASE_SHA: 5d1cb02bf7665ad04cf13e32360759de47443ff8
+      ALEMBIC_HEAD: f2a3b4c5d6e7
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/alembic_check
+      RUST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/alembic_check
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the original repo at the locked base (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: nasnih123-web/maturidi-academy
+          ref: 5d1cb02bf7665ad04cf13e32360759de47443ff8
+          path: original
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - name: Alembic check
+        run: bash scripts/alembic-check.sh
