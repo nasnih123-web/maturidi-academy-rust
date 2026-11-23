@@ -698,6 +698,21 @@ unblocks it / owner PR).
   ~45 ms after the insert locally, max 47 ms over 5 runs) — 3x
   the failing budget, ~330x local latency. Watermark-tie hazard
   checked and ruled out; no src/ change.
+- **CI flake diagnosis (ADR-167):** the 15 s wait did NOT fix it —
+  `wave8_pg_smoke` failed a 4th and 5th time in CI (push
+  45204668807 + PR 45204683344 on HEAD a77db2c, both runs, same
+  panic). A diagnosis pass could not reproduce it locally (6/6
+  under full CPU saturation) and ruled out watermark tie,
+  heartbeat timeout, CPU load, unparseable frames, and wrong
+  DB/channel/visibility; the CI log shows the binary finished in
+  19.95 s (consistent with a ~5 s baseline + the full 15 s wait,
+  but not proof of a genuine timeout). `wait_event` collapsed
+  timeout / stream-close / unparseable-frame into one `None`, so
+  the failure mode was unobserved — it now logs which path fired
+  and after how long (plus the wait's elapsed time at the
+  `expect` site). Budgets and assertions unchanged; the budget
+  is never raised again as a fix — the next red run decides
+  between the poller-side and the WS-close-side investigation.
 
 ### PR-4 Staging Deployment (not started)
 
