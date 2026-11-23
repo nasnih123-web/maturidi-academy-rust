@@ -9,12 +9,13 @@
 //! 404 to non-privileged callers, never 403.
 //!
 //! Upload scanning (ADR-050, resolved here): ClamAV is NOT reintroduced.
-//! Every uploaded byte passes `scan_upload` — SHA-256 hash-check against
-//! the `library.blocked_hashes` setting plus the EICAR standard test
-//! signature — and every upload lands as `draft`, so no file reaches
-//! `published` without human review (hash-check + manual admin review).
-//! Infected bytes are rejected 422 `file_infected` with the same audit
-//! row Python writes. There is no un-scanned upload path.
+//! Every uploaded byte passes the shared `upload_scan::scan_upload` —
+//! SHA-256 hash-check against the `library.blocked_hashes` setting
+//! plus the EICAR standard test signature — and every upload lands as
+//! `draft`, so no file reaches `published` without human review
+//! (hash-check + manual admin review). Infected bytes are rejected
+//! 422 `file_infected` with the same audit row Python writes. There
+//! is no un-scanned upload path.
 //!
 //! The media pipeline (transcribe / OCR) is a Python ARQ worker; the
 //! Rust trigger only marks rows `pending` and reports `enqueued: false`
@@ -31,7 +32,6 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
@@ -45,6 +45,7 @@ use crate::{
     library_visibility::{is_privileged, public_where, signed_url, SIGNED_PURPOSE_LIBRARY},
     settings::get_setting,
     storage::{put_object, read_bytes, verify_download_sig},
+    upload_scan::{scan_upload, ScanAudit},
     validate::{decode_cursor, encode_cursor, parse_body, parse_path_uuid, parse_query, query_int},
     video_links::{
         aparat_canonical_url, parse_aparat_video_hash, parse_youtube_video_id,
@@ -129,11 +130,6 @@ const APARAT_API_URL: &str = "https://www.aparat.com/etc/api/video/videohash/";
 const YOUTUBE_OEMBED_URL: &str = "https://www.youtube.com/oembed";
 const APARAT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
     (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
-
-/// The EICAR standard antivirus test file — the one signature every
-/// scanner (ClamAV included) flags. Detecting it keeps the
-/// `file_infected` path testable without a scanner daemon.
-const EICAR: &[u8] = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
 
 fn validation_err(field: &str, msg: &str) -> ApiError {
     ApiError::validation(vec![json!({ "field": field, "msg": msg })])
@@ -739,66 +735,6 @@ fn validate_cover(filename: Option<&str>, content: &[u8]) -> ApiResult<(String, 
     ))
 }
 
-// --- upload scanning (ADR-050 replacement) -----------------------------------
-
-fn sha256_hex(data: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(data);
-    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// Hash-check + manual-review scanner (replaces ClamAV per the user's
-/// 2026-11-19 decision): SHA-256 against the admin-managed
-/// `library.blocked_hashes` setting (JSON array of hex digests, empty
-/// by default) plus the EICAR standard test signature. Infected bytes
-/// are rejected 422 `file_infected` with the same audit row Python
-/// writes (`library.upload_rejected_infected`); clean bytes pass.
-/// Uploads always land as `draft`, so the workflow review is the
-/// manual gate before anything reaches `published`.
-async fn scan_upload(
-    db: &Db,
-    config: &crate::Config,
-    actor_id: Uuid,
-    data: &[u8],
-    filename: Option<&str>,
-    ip: Option<&str>,
-    user_agent: Option<&str>,
-) -> ApiResult<()> {
-    let mut signature: Option<&str> = None;
-    if data.len() >= EICAR.len() && data.windows(EICAR.len()).any(|w| w == EICAR) {
-        signature = Some("Eicar-Test-Signature");
-    } else if let Some(raw) = get_setting(db, config, "library.blocked_hashes").await? {
-        if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&raw) {
-            let hex = sha256_hex(data);
-            if items.iter().any(|v| v.as_str() == Some(hex.as_str())) {
-                signature = Some("blocked-hash");
-            }
-        }
-    }
-    if let Some(sig) = signature {
-        log_audit(
-            db,
-            Some(actor_id),
-            "admin",
-            "library.upload_rejected_infected",
-            "library_item",
-            None,
-            None,
-            Some(json!({ "filename": filename, "signature": sig })),
-            ip,
-            user_agent,
-        )
-        .await?;
-        return Err(ApiError::with_details(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "file_infected",
-            "فایل به ویروس آلوده است و رد شد",
-            json!({ "signature": sig }),
-        ));
-    }
-    Ok(())
-}
-
 /// `service._auto_pipeline_enabled` — `media.auto_pipeline`, default
 /// true. The enqueue itself is a no-op (no ARQ in Rust); statuses go
 /// `pending` exactly as Python with an offline worker.
@@ -1154,11 +1090,16 @@ async fn store_fetched_cover(
     if scan_upload(
         db,
         &state.config,
-        actor_id,
+        "library.upload_rejected_infected",
+        "library_item",
+        ScanAudit {
+            actor_id: Some(actor_id),
+            actor_type: "admin",
+            ip,
+            user_agent,
+        },
         &data,
         Some(&filename),
-        ip,
-        user_agent,
     )
     .await
     .is_err()
@@ -1943,11 +1884,16 @@ async fn create_external_item(
         scan_upload(
             db,
             &state.config,
-            actor.user.id,
+            "library.upload_rejected_infected",
+            "library_item",
+            ScanAudit {
+                actor_id: Some(actor.user.id),
+                actor_type: "admin",
+                ip,
+                user_agent,
+            },
             cover_bytes,
             cover_filename.as_deref(),
-            ip,
-            user_agent,
         )
         .await?;
         let (cext, _) = validate_cover(cover_filename.as_deref(), cover_bytes)?;
@@ -2042,22 +1988,32 @@ async fn create_upload_item(
     scan_upload(
         db,
         &state.config,
-        actor.user.id,
+        "library.upload_rejected_infected",
+        "library_item",
+        ScanAudit {
+            actor_id: Some(actor.user.id),
+            actor_type: "admin",
+            ip,
+            user_agent,
+        },
         &content,
         filename.as_deref(),
-        ip,
-        user_agent,
     )
     .await?;
     if let Some((cover_bytes, cover_filename)) = &cover {
         scan_upload(
             db,
             &state.config,
-            actor.user.id,
+            "library.upload_rejected_infected",
+            "library_item",
+            ScanAudit {
+                actor_id: Some(actor.user.id),
+                actor_type: "admin",
+                ip,
+                user_agent,
+            },
             cover_bytes,
             cover_filename.as_deref(),
-            ip,
-            user_agent,
         )
         .await?;
     }
@@ -2759,11 +2715,16 @@ async fn update_item_inner(
         scan_upload(
             db,
             &state.config,
-            actor.user.id,
+            "library.upload_rejected_infected",
+            "library_item",
+            ScanAudit {
+                actor_id: Some(actor.user.id),
+                actor_type: "admin",
+                ip,
+                user_agent,
+            },
             content,
             filename.as_deref(),
-            ip,
-            user_agent,
         )
         .await?;
     }

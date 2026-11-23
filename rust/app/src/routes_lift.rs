@@ -529,18 +529,19 @@ pub async fn openapi_handler(State(state): State<AppState>) -> Response {
 /// same way; a missing file (or a traversal attempt) is a 404 in
 /// Python's envelope.
 pub async fn static_file(State(state): State<AppState>, Path(path): Path<String>) -> Response {
-    let mut full = std::path::PathBuf::from(&state.config.storage_dir).join("static");
     for seg in path.split('/') {
         if seg.is_empty() || seg == "." || seg == ".." {
             return not_found().await;
         }
-        full.push(seg);
     }
-    let bytes = match tokio::fs::read(&full).await {
+    // Uploaded fonts live under `static/` in the configured storage
+    // (local disk or S3, ADR-162) — read through the storage
+    // abstraction, never straight from disk.
+    let bytes = match crate::storage::read_bytes(&state.config, &format!("static/{path}")).await {
         Ok(b) => b,
         Err(_) => return not_found().await,
     };
-    let content_type = full
+    let content_type = std::path::Path::new(&path)
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_lowercase)
@@ -575,33 +576,117 @@ fn not_found_response() -> Response {
 
 // ===========================================================================
 // Sidecar contract — the 8 routes that need the Python toolchain
+// (ADR-134, hardened in ADR-159; full contract in
+// `rust/app-cases/wave9/sidecar-contract.md`)
 // ===========================================================================
+
+/// One sidecar route's contract: the 503 code when the sidecar is
+/// unset/unreachable/timed-out, the timeout bounding the whole
+/// upstream call, the request-body cap, and the error when the cap is
+/// exceeded (the Python-equivalent code, answered before any byte
+/// goes upstream).
+struct SidecarRoute {
+    code: &'static str,
+    timeout_secs: u64,
+    body_cap: usize,
+    over_cap_status: StatusCode,
+    over_cap_code: &'static str,
+    over_cap_message: &'static str,
+}
+
+const AUDIO_CAP: usize = 32 * 1024 * 1024; // Python MAX_AUDIO_BYTES
+
+const SIDECAR_FATWA_ASK: SidecarRoute = SidecarRoute {
+    code: "fatwa_ask_unavailable",
+    timeout_secs: 300,
+    body_cap: 1024 * 1024,
+    over_cap_status: StatusCode::PAYLOAD_TOO_LARGE,
+    over_cap_code: "request_too_large",
+    over_cap_message: "درخواست بیش از حد بزرگ است",
+};
+
+const SIDECAR_RECEIPT_PDF: SidecarRoute = SidecarRoute {
+    code: "receipt_pdf_unavailable",
+    timeout_secs: 60,
+    body_cap: 1024,
+    over_cap_status: StatusCode::PAYLOAD_TOO_LARGE,
+    over_cap_code: "request_too_large",
+    over_cap_message: "درخواست بیش از حد بزرگ است",
+};
+
+const SIDECAR_HIFZ: SidecarRoute = SidecarRoute {
+    code: "hifz_asr_unavailable",
+    timeout_secs: 300,
+    body_cap: AUDIO_CAP,
+    over_cap_status: StatusCode::PAYLOAD_TOO_LARGE,
+    over_cap_code: "hifz_audio_too_large",
+    over_cap_message: "فایل صوتی بیش از حد بزرگ است",
+};
+
+const SIDECAR_VOICE: SidecarRoute = SidecarRoute {
+    code: "voice_stt_unavailable",
+    timeout_secs: 180,
+    body_cap: AUDIO_CAP,
+    over_cap_status: StatusCode::UNPROCESSABLE_ENTITY,
+    over_cap_code: "audio_too_large",
+    over_cap_message: "فایل صوتی بیش از حد بزرگ است",
+};
+
+/// The effective timeout for a route: `SIDECAR_TIMEOUT_SECS` (env)
+/// overrides every route at once when set — an operations knob and
+/// the knob the tests use to prove the timeout path without waiting
+/// minutes. `0` (default) means the per-route value.
+fn sidecar_timeout(config: &Config, route: &SidecarRoute) -> Duration {
+    if config.sidecar_timeout_secs > 0 {
+        Duration::from_secs(config.sidecar_timeout_secs)
+    } else {
+        Duration::from_secs(route.timeout_secs)
+    }
+}
 
 /// Forward one request to the sidecar (`SIDECAR_URL` + the same
 /// method/path/query/headers/body) and return its status, headers and
-/// body verbatim — the old proxy's forwarding logic, renamed, applied
-/// ONLY to these routes. Unset or unreachable sidecar → honest 503
-/// with the route's code (never a 502, never a faked success).
+/// body — the old proxy's forwarding logic, renamed, applied ONLY to
+/// these routes. Rules (ADR-159):
+/// - the request body is read capped: over-cap answers with the
+///   route's over-cap error before any upstream call;
+/// - unset or unreachable sidecar, or a timeout, → honest 503 with
+///   the route's code (never a 502, never a faked success);
+/// - no retries: none of these POSTs is idempotent;
+/// - the upstream body streams (`Body::from_stream`) instead of
+///   being buffered, so SSE (`fatwa/ask?stream=true`) reaches the
+///   client event-by-event.
 async fn forward_to_sidecar(
     state: &AppState,
     req: Request<Body>,
-    code: &'static str,
+    route: &SidecarRoute,
 ) -> Response<Body> {
-    let Some(base) = state.config.sidecar_url.as_deref() else {
-        return sidecar_unavailable(code);
-    };
     let (parts, body) = req.into_parts();
+    let bytes = match read_capped(body, route.body_cap).await {
+        Ok(b) => b,
+        Err(CappedRead::OverCap) => {
+            return ApiError::new(
+                route.over_cap_status,
+                route.over_cap_code,
+                route.over_cap_message,
+            )
+            .into_response();
+        }
+        Err(CappedRead::ReadFailed) => return sidecar_unavailable(route.code),
+    };
+    let Some(base) = state.config.sidecar_url.as_deref() else {
+        return sidecar_unavailable(route.code);
+    };
     let path_and_query = parts
         .uri
         .path_and_query()
         .map(|pq| pq.as_str())
         .unwrap_or("/");
     let url = format!("{}{path_and_query}", base.trim_end_matches('/'));
-    let bytes = match axum::body::to_bytes(body, usize::MAX).await {
-        Ok(b) => b,
-        Err(_) => return sidecar_unavailable(code),
-    };
-    let mut request = state.client.request(parts.method.clone(), &url);
+    let mut request = state
+        .client
+        .request(parts.method.clone(), &url)
+        .timeout(sidecar_timeout(&state.config, route));
     for (name, value) in parts.headers.iter() {
         if name == header::HOST {
             continue;
@@ -610,14 +695,10 @@ async fn forward_to_sidecar(
     }
     let upstream = match request.body(bytes).send().await {
         Ok(r) => r,
-        Err(_) => return sidecar_unavailable(code),
+        Err(_) => return sidecar_unavailable(route.code),
     };
     let status = upstream.status();
     let headers = upstream.headers().clone();
-    let upstream_bytes = match upstream.bytes().await {
-        Ok(b) => b,
-        Err(_) => return sidecar_unavailable(code),
-    };
     let mut builder = Response::builder().status(status);
     for (name, value) in headers.iter() {
         if name == header::CONTENT_LENGTH
@@ -629,8 +710,29 @@ async fn forward_to_sidecar(
         builder = builder.header(name, value);
     }
     builder
-        .body(Body::from(upstream_bytes))
-        .unwrap_or_else(|_| sidecar_unavailable(code))
+        .body(Body::from_stream(upstream.bytes_stream()))
+        .unwrap_or_else(|_| sidecar_unavailable(route.code))
+}
+
+enum CappedRead {
+    OverCap,
+    ReadFailed,
+}
+
+/// Read a request body up to `cap` bytes; stop as soon as the cap is
+/// exceeded instead of buffering an unbounded body.
+async fn read_capped(body: Body, cap: usize) -> Result<bytes::Bytes, CappedRead> {
+    use futures_util::StreamExt;
+    let mut stream = body.into_data_stream();
+    let mut buf = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| CappedRead::ReadFailed)?;
+        buf.extend_from_slice(&chunk);
+        if buf.len() > cap {
+            return Err(CappedRead::OverCap);
+        }
+    }
+    Ok(bytes::Bytes::from(buf))
 }
 
 fn sidecar_unavailable(code: &'static str) -> Response<Body> {
@@ -646,56 +748,56 @@ pub async fn sidecar_fatwa_ask(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Response<Body> {
-    forward_to_sidecar(&state, req, "fatwa_ask_unavailable").await
+    forward_to_sidecar(&state, req, &SIDECAR_FATWA_ASK).await
 }
 
 pub async fn sidecar_receipt_pdf(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Response<Body> {
-    forward_to_sidecar(&state, req, "receipt_pdf_unavailable").await
+    forward_to_sidecar(&state, req, &SIDECAR_RECEIPT_PDF).await
 }
 
 pub async fn sidecar_hifz_grade(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Response<Body> {
-    forward_to_sidecar(&state, req, "hifz_asr_unavailable").await
+    forward_to_sidecar(&state, req, &SIDECAR_HIFZ).await
 }
 
 pub async fn sidecar_hifz_grade_word(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Response<Body> {
-    forward_to_sidecar(&state, req, "hifz_asr_unavailable").await
+    forward_to_sidecar(&state, req, &SIDECAR_HIFZ).await
 }
 
 pub async fn sidecar_hifz_test_answer(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Response<Body> {
-    forward_to_sidecar(&state, req, "hifz_asr_unavailable").await
+    forward_to_sidecar(&state, req, &SIDECAR_HIFZ).await
 }
 
 pub async fn sidecar_hifz_voice_search(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Response<Body> {
-    forward_to_sidecar(&state, req, "hifz_asr_unavailable").await
+    forward_to_sidecar(&state, req, &SIDECAR_HIFZ).await
 }
 
 pub async fn sidecar_voice_transcribe(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Response<Body> {
-    forward_to_sidecar(&state, req, "voice_stt_unavailable").await
+    forward_to_sidecar(&state, req, &SIDECAR_VOICE).await
 }
 
 pub async fn sidecar_voice_ask(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Response<Body> {
-    forward_to_sidecar(&state, req, "voice_stt_unavailable").await
+    forward_to_sidecar(&state, req, &SIDECAR_VOICE).await
 }
 
 // ===========================================================================

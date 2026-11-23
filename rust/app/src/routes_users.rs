@@ -6,9 +6,12 @@
 //! (`full_name`, `avatar_media_id`, `date_of_birth`, `gender`,
 //! `country_code`); gender is only `male`/`female`; birth dates must
 //! not be in the future and age ≤ 120; phones are normalized to E.164.
-//! Avatar upload is fail-closed without a virus scan (503
-//! `antivirus_unavailable`) unless the dev-only bypass flag is set —
-//! the same gate as Python's `scan_upload_or_reject` (ADR-015).
+//! Avatar upload runs the shared ADR-051 scanner (EICAR + SHA-256
+//! blocklist, ADR-164) before the magic-byte sniff — scan first, then
+//! sniff, the same order as Python's `scan_upload_or_reject`. The old
+//! ClamAV gate (503 `antivirus_unavailable` without the dev bypass)
+//! is gone: the Rust deployment ships no clamd, so it could never
+//! pass in production.
 
 use std::collections::HashMap;
 
@@ -32,6 +35,7 @@ use crate::{
     errors::{ApiError, ApiResult},
     settings::{get_setting, get_typed_setting},
     storage,
+    upload_scan::{scan_upload, ScanAudit},
     validate::{opt_str, opt_str_raw, opt_uuid, parse_body, req_str},
     AppState,
 };
@@ -438,14 +442,25 @@ pub async fn upload_avatar(
             json!({ "msg": "file is required" }),
         ]));
     };
-    // Virus scan gate — fail-closed unless the dev-only bypass flag is set.
-    if !(state.config.clamav_allow_insecure_dev_bypass && state.config.app_env == "dev") {
-        return Err(ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "antivirus_unavailable",
-            "اسکن ویروس در دسترس نیست؛ آپلود به‌صورت fail-closed رد شد. سرویس ClamAV را بررسی کنید.",
-        ));
-    }
+    // ADR-051 scan first, then the magic-byte sniff — the same order
+    // as Python's `scan_upload_or_reject` (ADR-164). A hit is 422
+    // `file_infected`; clean bytes proceed to storage.
+    let (ip, ua) = client_ip_ua(&headers);
+    scan_upload(
+        db,
+        &state.config,
+        "user.avatar_upload_rejected_infected",
+        "user",
+        ScanAudit {
+            actor_id: Some(ctx.user.id),
+            actor_type: "user",
+            ip: ip.as_deref(),
+            user_agent: ua.as_deref(),
+        },
+        &bytes,
+        filename.as_deref(),
+    )
+    .await?;
     let Some((mime, ext)) = sniff_avatar_image(&bytes) else {
         return Err(ApiError::new(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -496,7 +511,6 @@ pub async fn upload_avatar(
         json!({ "media_id": asset_id.to_string() }),
     )
     .await?;
-    let (ip, ua) = client_ip_ua(&headers);
     log_audit(
         db,
         Some(user.id),

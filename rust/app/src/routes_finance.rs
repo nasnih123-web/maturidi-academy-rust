@@ -53,6 +53,7 @@ use crate::{
     errors::{ApiError, ApiResult},
     settings::{get_setting, get_typed_setting},
     storage::{put_object, read_bytes},
+    upload_scan::{scan_upload, ScanAudit},
     validate::{
         as_int, opt_localized, opt_str, opt_uuid, parse_body, parse_datetime_str, parse_path_uuid,
         parse_query, query_int, req_localized,
@@ -83,10 +84,6 @@ const COINGECKO_TON_URL: &str =
 const FX_USER_AGENT: &str = "maturidi-academy/1.0 (+finance-fx)";
 /// FX cache TTL: 5 minutes (Python `_CACHE_TTL_S`).
 const FX_CACHE_TTL_SECS: f64 = 300.0;
-
-/// The EICAR standard antivirus test file (same bytes as the Wave 6
-/// library gate).
-const EICAR: &[u8] = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
 
 fn validation_err(field: &str, msg: &str) -> ApiError {
     ApiError::validation(vec![json!({ "field": field, "msg": msg })])
@@ -941,64 +938,6 @@ async fn get_rate_irr(currency: &str) -> Option<(i64, String)> {
         guard.insert(cur, (rate, source.to_string(), Instant::now()));
     }
     Some((rate, source.to_string()))
-}
-
-// --- receipt-image scan gate (ADR-051, FIN-02) -------------------------------
-
-/// Hash-check + EICAR gate for receipt uploads, mirroring the Wave 6
-/// library `scan_upload`: SHA-256 against the admin-managed
-/// `library.blocked_hashes` setting plus the EICAR signature. A hit is
-/// 422 `file_infected` with audit row
-/// `finance.upload_rejected_infected`.
-/// Audit context for the receipt scan gate (kept as one argument so the
-/// scan helper stays under clippy's argument-count limit).
-struct ScanAudit<'a> {
-    actor_id: Option<Uuid>,
-    actor_type: &'a str,
-    ip: Option<&'a str>,
-    user_agent: Option<&'a str>,
-}
-
-async fn scan_receipt_upload(
-    db: &Db,
-    config: &Config,
-    audit: ScanAudit<'_>,
-    data: &[u8],
-    filename: Option<&str>,
-) -> ApiResult<()> {
-    let mut signature: Option<&str> = None;
-    if data.len() >= EICAR.len() && data.windows(EICAR.len()).any(|w| w == EICAR) {
-        signature = Some("Eicar-Test-Signature");
-    } else if let Some(raw) = get_setting(db, config, "library.blocked_hashes").await? {
-        if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&raw) {
-            let hex = sha256_hex(data);
-            if items.iter().any(|v| v.as_str() == Some(hex.as_str())) {
-                signature = Some("blocked-hash");
-            }
-        }
-    }
-    if let Some(sig) = signature {
-        log_audit(
-            db,
-            audit.actor_id,
-            audit.actor_type,
-            "finance.upload_rejected_infected",
-            "manual_donation_proof",
-            None,
-            None,
-            Some(json!({ "filename": filename, "signature": sig })),
-            audit.ip,
-            audit.user_agent,
-        )
-        .await?;
-        return Err(ApiError::with_details(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "file_infected",
-            "فایل به ویروس آلوده است و رد شد",
-            json!({ "signature": sig }),
-        ));
-    }
-    Ok(())
 }
 
 // --- finalize (the idempotency heart of callbacks + webhooks) ---------------
@@ -2310,9 +2249,12 @@ pub async fn donate_manual(
         ));
     }
     if let Some(data) = &image_data {
-        scan_receipt_upload(
+        // Receipt images use the shared ADR-051 scanner (ADR-164).
+        scan_upload(
             db,
             &state.config,
+            "finance.upload_rejected_infected",
+            "manual_donation_proof",
             ScanAudit {
                 actor_id: user_id,
                 actor_type,

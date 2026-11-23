@@ -192,8 +192,48 @@ pub async fn issue_verification_email(ctx: &Ctx<'_>, user: &UserRow) -> Result<(
          VALUES (?, ?, ?, 'email_verify', ?, FALSE, ?)", &[(new_id()).into_arg(), (user.id).into_arg(), (hash_token(&token)).into_arg(), (utc_now() + chrono::Duration::hours(EMAIL_VERIFY_EXPIRE_HOURS)).into_arg(), (utc_now()).into_arg()])
     .await?;
     if let Some(email) = &user.email {
-        // Best-effort like Python: delivery failure never breaks signup.
-        crate::mail::send_email(email, "تأیید ایمیل", "", "").await;
+        // Best-effort like Python: delivery failure never breaks
+        // signup. The token is already stored, so the user can ask
+        // for a resend; a failure is logged (redacted) and the flow
+        // continues.
+        let locale = crate::mail_templates::resolve_email_locale(
+            user.phone.as_deref(),
+            Some(user.locale.as_str()),
+        );
+        let action_url = crate::mail_templates::public_url(
+            &ctx.state.config.app_base_url,
+            &format!("/{locale}/verify-email?token={token}"),
+        );
+        let logo_url =
+            crate::mail_templates::public_url(&ctx.state.config.app_base_url, "/logo.jpg");
+        match action_url {
+            Some(action_url) => {
+                let rendered = crate::mail_templates::render_verification_email(
+                    locale,
+                    &action_url,
+                    &token,
+                    logo_url.as_deref(),
+                    Some(user.full_name.as_str()),
+                );
+                if let Err(err) = crate::mail::send_email(
+                    &ctx.state.config,
+                    email,
+                    &rendered.subject,
+                    &rendered.text,
+                    &rendered.html,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "verification email to {email} failed: {}",
+                        crate::mail::redact_secrets(&err.to_string())
+                    );
+                }
+            }
+            None => {
+                tracing::warn!("verification email to {email} skipped: invalid APP_BASE_URL");
+            }
+        }
     }
     Ok(())
 }

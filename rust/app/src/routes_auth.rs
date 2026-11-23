@@ -311,7 +311,22 @@ async fn request_register_phone_code_inner(ctx: &Ctx<'_>, phone: &str) -> Result
     ctx.db.execute("INSERT INTO phone_verification_codes (id, user_id, phone, code_hash, expires_at, used, created_at) \
          VALUES (?, ?, ?, ?, ?, FALSE, ?)", &[(new_id()).into_arg(), (user.id).into_arg(), (phone).into_arg(), (hash_token(&code)).into_arg(), (utc_now() + chrono::Duration::minutes(PHONE_CODE_EXPIRE_MINUTES)).into_arg(), (utc_now()).into_arg()])
     .await?;
-    crate::mail::send_sms(phone, &format!("کد تأیید آکادمی ماتریدی: {code}")).await;
+    // Best-effort like Python: the code is already stored, so a
+    // delivery failure never breaks the request — the user can ask
+    // for a resend. The failure is logged (redacted); the response
+    // keeps Python's wording either way.
+    if let Err(err) = crate::mail::send_sms(
+        &ctx.state.config,
+        phone,
+        &format!("کد تأیید آکادمی ماتریدی: {code}"),
+    )
+    .await
+    {
+        tracing::warn!(
+            "phone code sms to {phone} failed: {}",
+            crate::mail::redact_secrets(&err.to_string())
+        );
+    }
     Ok(())
 }
 
@@ -495,7 +510,44 @@ async fn request_password_reset_inner(
                  VALUES (?, ?, ?, 'reset', ?, FALSE, ?)", &[(new_id()).into_arg(), (user.id).into_arg(), (hash_token(&token)).into_arg(), (utc_now() + chrono::Duration::hours(RESET_TOKEN_EXPIRE_HOURS)).into_arg(), (utc_now()).into_arg()])
             .await?;
             if let Some(to) = &user.email {
-                crate::mail::send_email(to, "بازیابی رمز عبور", "", "").await;
+                // Best-effort like Python: the token is already
+                // stored, so a delivery failure never breaks the
+                // request — the response stays conditional either way.
+                let locale = crate::mail_templates::resolve_email_locale(
+                    user.phone.as_deref(),
+                    Some(user.locale.as_str()),
+                );
+                let action_url = crate::mail_templates::public_url(
+                    &ctx.state.config.app_base_url,
+                    &format!("/{locale}/reset-password?token={token}"),
+                );
+                let logo_url =
+                    crate::mail_templates::public_url(&ctx.state.config.app_base_url, "/logo.jpg");
+                if let Some(action_url) = action_url {
+                    let rendered = crate::mail_templates::render_password_reset_email(
+                        locale,
+                        &action_url,
+                        &token,
+                        logo_url.as_deref(),
+                        Some(user.full_name.as_str()),
+                    );
+                    if let Err(err) = crate::mail::send_email(
+                        &ctx.state.config,
+                        to,
+                        &rendered.subject,
+                        &rendered.text,
+                        &rendered.html,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            "password reset email to {to} failed: {}",
+                            crate::mail::redact_secrets(&err.to_string())
+                        );
+                    }
+                } else {
+                    tracing::warn!("password reset email to {to} skipped: invalid APP_BASE_URL");
+                }
             }
         }
     }
@@ -1030,7 +1082,21 @@ pub async fn verify_phone_request(
     db.execute("INSERT INTO phone_verification_codes (id, user_id, phone, code_hash, expires_at, used, created_at) \
          VALUES (?, ?, ?, ?, ?, FALSE, ?)", &[(new_id()).into_arg(), (ctx_user.user.id).into_arg(), (&phone).into_arg(), (hash_token(&code)).into_arg(), (utc_now() + chrono::Duration::minutes(PHONE_CODE_EXPIRE_MINUTES)).into_arg(), (utc_now()).into_arg()])
     .await?;
-    crate::mail::send_sms(&phone, &format!("کد تأیید آکادمی ماتریدی: {code}")).await;
+    // Best-effort like Python: the code is already stored; a
+    // delivery failure is logged (redacted) and the response keeps
+    // Python's wording either way.
+    if let Err(err) = crate::mail::send_sms(
+        &ctx.state.config,
+        &phone,
+        &format!("کد تأیید آکادمی ماتریدی: {code}"),
+    )
+    .await
+    {
+        tracing::warn!(
+            "phone code sms to {phone} failed: {}",
+            crate::mail::redact_secrets(&err.to_string())
+        );
+    }
     let _ = ctx;
     Ok(Json(json!({ "message": "کد تأیید پیامک شد" })))
 }
