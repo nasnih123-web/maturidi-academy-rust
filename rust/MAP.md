@@ -689,6 +689,15 @@ unblocks it / owner PR).
   same shape as `wait_event`) and skips interleaved live frames;
   assertions unchanged. Test-only fix; the poller/WS server are
   untouched.
+- **CI flake fix 2 (ADR-166):** `wave8_pg_smoke` failed a third
+  time in CI (push run 45181799404 attempts #1 and #2 on HEAD
+  80f6056, same `"live event on pg"` panic; the PR run on the same
+  HEAD was all green and the ADR-165 test passed in the failing
+  run), so no third blind re-run: its live-event wait goes from
+  5 s to 15 s, justified by measurement (live event arrives
+  ~45 ms after the insert locally, max 47 ms over 5 runs) — 3x
+  the failing budget, ~330x local latency. Watermark-tie hazard
+  checked and ruled out; no src/ change.
 
 ### PR-4 Staging Deployment (not started)
 
