@@ -1002,7 +1002,12 @@ async fn wave8_pg_smoke() {
         json!("subscribed")
     );
     let event_id = insert_event(&env, "user.login", "user", &uid, Utc::now()).await;
-    let got = wait_event(&mut client, "user.login", Duration::from_secs(5))
+    // Live-event wait budget is 15 s, not 5 s (ADR-166): the event
+    // arrives ~45 ms after the insert locally, but the poller tick +
+    // PG query + broadcast can stall past 5 s on a loaded CI runner
+    // (three CI failures of exactly this wait), so the budget is 3x
+    // the failing one with ~330x headroom over the measured latency.
+    let got = wait_event(&mut client, "user.login", Duration::from_secs(15))
         .await
         .expect("live event on pg");
     assert_eq!(got["event_id"], json!(event_id.to_string()));
