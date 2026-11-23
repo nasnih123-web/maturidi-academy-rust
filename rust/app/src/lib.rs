@@ -35,8 +35,6 @@ use axum::{
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-use crate::ratelimit::RateLimiter;
-
 mod adhan;
 mod audit;
 mod auth_service;
@@ -99,6 +97,12 @@ mod workflow;
 
 pub use db::{init_test_schema, Arg, Db, IntoArg, TEST_SCHEMA};
 use errors::ApiError;
+/// Distributed rate limiter — public so integration tests (Wave 9 PR-2)
+/// can exercise its Redis path directly: the limiter is the only
+/// component besides /ready that talks to Redis, and its behaviour
+/// (allow → deny at the limit, fail-closed auth in production, memory
+/// fallback in dev) is only observable through this type.
+pub use ratelimit::RateLimiter;
 /// API-key guards (Wave 7 widget routes) — public so later waves and
 /// integration tests can call them directly.
 pub use routes_api_keys::{
