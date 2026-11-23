@@ -102,7 +102,7 @@ Wave 9 PR-3 work, not porting decisions).
 - Equivalence bar for floats, error text, validation errors: status + error
   shape pinned, exact Pydantic wording not reproduced (ADR-006).
 
-## Port progress — Waves 1–8 (complete) + Wave 9 (PR-1 in progress)
+## Port progress — Waves 1–8 (complete) + Wave 9 (PR-2 in progress)
 
 - Wave 1 (done, verified green locally): Axum front door, `GET /health`,
   `GET /ready`, proxy fallback to `ORIGIN_URL`. See ADR-007 / ADR-013.
@@ -488,7 +488,7 @@ Wave 9 PR-3 work, not porting decisions).
   - Not yet ported in Wave 2 (stubs / Wave 7): real mail/SMS delivery,
     ClamAV scan, S3 storage (see ADR-015).
 
-## Wave 9 — Production Readiness (PR-1 in progress)
+## Wave 9 — Production Readiness (PR-2 in progress)
 
 Goal: prepare the Rust backend for a real build, test and deployment on
 an **independent** Railway project. Standing rules (user directive
@@ -547,19 +547,62 @@ Full corrections in ADR-148.
   and on local Postgres when `WAVE2_PG_URL` is set); cases under
   `rust/app-cases/wave9/`.
 
-### PR-2 / PR-3 / PR-4 (not started)
+### PR-2 CI and Build Verification (in progress)
 
-- PR-2: `cargo build --release --locked`, real Docker build in CI,
-  Postgres `vector` + `pg_trgm` + Redis tests in CI, Alembic check
-  against the locked base, cargo audit + SBOM; merge blocked on any
-  gate failure.
-- PR-3: real email + SMS delivery; complete sidecar contract + tests
-  for ASR, fatwa assistant, PDF; Python workers + queue processing;
-  durable storage; malware scan + upload limits; Release Blockers list.
-- PR-4: new Railway project; independent Postgres + Redis; migrations
-  on the test database; sidecar + workers up; build + deploy the Rust
-  version; fixed Cutover Preflight; end-to-end tests for all major
-  modules; load test vs FastAPI; backup/restore + rollback test.
+Four CI jobs, all merge gates — a failing run blocks the PR
+(ADR-149/150/151/153/154). Branch protection is the enforcement: the repo must
+require the checks `rust`, `redis`, `docker` and `alembic` on `main` (Settings →
+Branches → branch protection rule for `main` → "Require status checks
+to pass"). **That setting is a manual follow-up — it is NOT done by
+this PR and must not be claimed as done.** Until it is set, the gates
+exist but nothing enforces them.
+
+| Gate (job) | What runs | Service images | What it proves that local runs cannot |
+|---|---|---|---|
+| `rust` | fmt, clippy, `cargo build --release --locked`, `cargo test` (SQLite), PG smokes sequential, `cargo audit` | `pgvector/pgvector:pg16` (DB `maturidi_test`) | PG smokes against a real pgvector Postgres |
+| `redis` | `cargo test --test wave9_pr2` (PING, SET/GET, RateLimiter, /ready live/dead) | `redis:7-alpine` | Redis tests against a real server — its own job so the service is never reachable from the `rust` job (ADR-154) |
+| `docker` | build the repo Dockerfile, syft SBOM → artifact `sbom` | — (builds the image) | first-ever build of the Dockerfile |
+| `alembic` | `scripts/alembic-check.sh` | `pgvector/pgvector:pg16` (DB `alembic_check`) | locked migrations upgrade a real Postgres; Rust /ready against the migrated schema |
+
+- **Redis wiring (ADR-153, corrected by ADR-154):** the `redis` job
+  is a job of its own — NOT a step in the `rust` job. A Redis service
+  in the `rust` job is reachable at localhost:6379, which is exactly
+  the default `redis_url` the test configs use
+  (`Config::default()`), so every binary would share the auth
+  rate-limit counter (same test IP) and the suite would 429 itself —
+  proven locally twice. The `redis` job runs only
+  `cargo test --test wave9_pr2` with `REDIS_URL` set; the `rust` job
+  has no Redis service and never sets `REDIS_URL`. `WAVE2_PG_URL` is set ONLY in the sequential smoke step (`cargo test --test <bin>
+  -- --test-threads=1 pg_smoke`, 16 binaries) — the smokes share one
+  database and would clobber each other under parallel `cargo test`.
+- **Docker (ADR-150):** `docker/build-push-action@v6`, `push: false`,
+  `load: true`, tag `maturidi-api-rs:ci`. SBOM is SPDX JSON from syft
+  on the built image (OS packages + binary), uploaded as artifact
+  `sbom`. `cargo audit` fails the run on any RUSTSEC advisory except
+  the two named in ADR-152 (`--ignore RUSTSEC-2023-0071` rsa and
+  `--ignore RUSTSEC-2026-0459` libsqlite3-sys — no patch upgrade exists
+  inside sqlx 0.8; the sqlx 0.9 upgrade is a PR-3 open item). The first
+  audit also surfaced chrono RUSTSEC-2026-0543 as a warning only (no
+  fixed upgrade; recorded in ADR-152, no ignore needed).
+- **Alembic (ADR-151):** the original repo is checked out at the
+  locked SHA `5d1cb02…` (read-only) and `scripts/alembic-check.sh`
+  asserts single head `f2a3b4c5d6e7`, runs `alembic upgrade head`,
+  verifies version row + `vector`/`pg_trgm` + 120 tables (119 app +
+  `alembic_version`), then serves the Rust release binary's /ready
+  against the migrated schema. The same script runs locally.
+- **What CI still cannot verify:** nothing in PR-2's scope — the
+  Docker build, the vector extension on the service image, and the
+  Alembic upgrade are all CI-verified by design. (No Docker daemon
+  exists in the dev VM, so local runs cannot reproduce the `docker`
+  job; the `rust` and `alembic` jobs are reproducible locally with a
+  local Postgres + Redis.)
+- **Tests:** `rust/app/tests/wave9_pr2.rs` (Redis PING/SET/GET,
+  `RateLimiter` on real Redis, /ready with live/dead Redis, PG smoke
+  for `vector` + `pg_trgm`) + cases `pr2-01`/`pr2-02` under
+  `rust/app-cases/wave9/`. `RateLimiter` is newly re-exported from the
+  crate root so the tests can reach it.
+
+### PR-3 / PR-4 (not started)
 
 ## Units (status)
 
