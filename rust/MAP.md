@@ -607,7 +607,7 @@ one-time code himself in the live browser.
 
 ### PR-3 Production Blockers (this PR)
 
-Closes the gaps PR-1/PR-2 left open. Full record: ADR-157–164;
+Closes the gaps PR-1/PR-2 left open. Full record: ADR-157–165;
 contract docs under `rust/app-cases/wave9/`;
 **`rust/RELEASE_BLOCKERS.md`** is the single registry of everything
 that still blocks cutover (each entry: what / why it blocks / what
@@ -679,6 +679,16 @@ unblocks it / owner PR).
   green. (One suite run during PR-3 failed every pg_smoke with
   exactly 1 failure per binary — the cause was a VM replacement
   that wiped Postgres; see TOOLS.md. The code was never at fault.)
+- **CI flake fix (ADR-165):** CI run #101 failed the `rust` job
+  twice in `rust/app/tests/wave8_lift.rs` (attempt #1
+  `wave8_pg_smoke`, attempt #2 `ws_resume_replay_from_query_and_live_message`)
+  — the outbox poller's 1 s tick can broadcast a live event frame
+  between the client's subscribe and the server's ack/replay/resumed,
+  and the tests read a single next frame. The resume test now waits
+  for the frame it expects (`wait_frame_type` / `wait_event_id`,
+  same shape as `wait_event`) and skips interleaved live frames;
+  assertions unchanged. Test-only fix; the poller/WS server are
+  untouched.
 
 ### PR-4 Staging Deployment (not started)
 
