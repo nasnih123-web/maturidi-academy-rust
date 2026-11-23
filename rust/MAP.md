@@ -404,7 +404,7 @@ Wave 9 PR-3 work, not porting decisions).
   - Route accounting: Python has 468 endpoints (467 HTTP decorators + the hifz WS stream) plus `/docs` (dev-only), `/openapi.json` (auto) and the `/static` mount. Rust serves **471** route+method combos: **463 native** (440 pre-lift + 5 lift-new + 18 projects) + **8 sidecar-contract**. The 6 generic CMS `{resource}` routes cover all 36 concrete Python CMS routes, and the due-soon-cycle endpoint is a deliberate Wave 8 addition with no Python HTTP equivalent. The pre-lift native count is **440**, re-verified two ways (source parse and live-router spec); the 439 figure was a miscount (a `//` comment hid the video-subtitles route from a naive parse) and is refuted in ADR-147.
   - Replay (ADR-138): `rust/app/tests/wave8.rs` replays all 127 app-cases from waves 2–7 against the pure-Rust build (fresh sqlite DB per case, auth provisioned by label, mechanical placeholder substitution, per-file seeding hooks) — final replay 2026-11-22: **122 passed, 0 failed, 5 skipped** (wave2 11/0/3, wave3 14/0/0, wave4 15/0/0, wave5 14/0/0, wave6 18/0/2, wave7 50/0/0); the 5 skipped are documentation-only by design (wave2/08, 09, 10 need tokens from a prior step; wave6/lib-05 needs a minted download signature; wave6/lib-06 has a prose multipart body). The first run had 3 failures, all case-file drift verified against Python and corrected to the Python behaviour (wave2/01 nested `places.globe` + no vapid key; lib-04 no `total`; syn-08 bare-array response); PG smoke green.
   - Cutover: `scripts/cutover.sh` (read-only preflight: live-project guard, env, Postgres, Redis, schema, bundled data, sidecar UP/DOWN table; exit 0 GO / 2 DEGRADED / 1 NO-GO; `--dry-run`) + `scripts/cutover-README.md` (Persian runbook: deploy order, env-var table, smoke checklist, rollback). Script only — never executed against a live server. `Dockerfile` + `railway.toml` were added in the Wave 8 push and are documented as-is in Wave 9 PR-1 (`scripts/cutover-README.md` §3) — **neither has ever been built; the first Railway build is their first verification**. Open items: whether Railway Postgres provides `vector`/`pg_trgm`; the mail/SMS delivery path on the Rust deployment (mailer is a stub); widget CORS wildcard must come from the deploy layer.
-  - Tests: `rust/app/tests/wave8_projects.rs` (18: 17 sqlite + `wave8_projects_pg_smoke`), `rust/app/tests/wave8_lift.rs` (16: 15 sqlite + `wave8_pg_smoke`), `rust/app/tests/wave8.rs` (2: `replay_all_app_cases` — 122 passed / 0 failed / 5 skipped over the 127 wave2–wave7 cases — + `wave8_pg_smoke`), `rust/app/tests/front_door.rs` (11, rewritten: proxy tests deleted, 404/405/metrics/health/openapi/sidecar-503 added). Cases: `rust/app-cases/wave8/` (`proj-01`–`proj-13`, `lift-01`–`lift-12` + README).
+  - Tests: `rust/app/tests/wave8_projects.rs` (18: 17 sqlite + `wave8_projects_pg_smoke`), `rust/app/tests/wave8_lift.rs` (17: 15 sqlite + 2 pg: `wave8_pg_smoke` + `wave8_pg_smoke_poller_spawn_cutoff`, ADR-168), `rust/app/tests/wave8.rs` (2: `replay_all_app_cases` — 122 passed / 0 failed / 5 skipped over the 127 wave2–wave7 cases — + `wave8_pg_smoke`), `rust/app/tests/front_door.rs` (11, rewritten: proxy tests deleted, 404/405/metrics/health/openapi/sidecar-503 added). Cases: `rust/app-cases/wave8/` (`proj-01`–`proj-13`, `lift-01`–`lift-12` + README).
   - Tests: `rust/app/tests/wave4.rs` (24 tests, sqlite in-memory;
     `wave4_pg_smoke` replays the critical path on local Postgres when
     `WAVE2_PG_URL` is set). Cases: `rust/app-cases/wave4/` (15 cases).
@@ -676,7 +676,11 @@ unblocks it / owner PR).
   Full suite after PR-3: **363 passed, 0 failed across 19 binaries**
   (339 pre-PR-3 + 24 new), fmt + clippy clean, `cargo audit` exits
   0 with no ignores, `scripts/alembic-check.sh` PASS, release build
-  green. (One suite run during PR-3 failed every pg_smoke with
+  green. After the ADR-168 fix (spawn-time poller watermark +
+  `wave8_pg_smoke_poller_spawn_cutoff` regression test): **364
+  passed, 0 failed across 19 binaries** (363 + 1 new), full suite
+  re-verified sequentially with the exact CI pg_smoke loop green on
+  all 17 binaries. (One suite run during PR-3 failed every pg_smoke with
   exactly 1 failure per binary — the cause was a VM replacement
   that wiped Postgres; see TOOLS.md. The code was never at fault.)
 - **CI flake fix (ADR-165):** CI run #101 failed the `rust` job
@@ -713,6 +717,27 @@ unblocks it / owner PR).
   `expect` site). Budgets and assertions unchanged; the budget
   is never raised again as a fix — the next red run decides
   between the poller-side and the WS-close-side investigation.
+- **CI flake fix 3 (ADR-168):** the 15 s wait did NOT fix it either —
+  `wave8_pg_smoke` failed again in CI on HEAD bf94882 (push run #115
+  + PR run #116, both runs, same panic) — but the temporary
+  `[poller-diag]` logging (one commit, reverted here) proved the
+  mechanism from the CI log: the poller's first run was 3.54 s after
+  spawn (locally 3.6 ms) and its watermark captured the test's own
+  `user.login` event, so all 286 ticks fetched the same 4 rows and
+  sent 0. The watermark was captured inside the spawned task, so a
+  first poll delayed past an insert drops that event forever. The
+  fix is in the binary: the cutoff is now the spawn instant
+  `(spawned_at, Uuid::nil())`, captured synchronously before
+  spawning — any row created after spawn is delivered even if the
+  first poll runs seconds late. The sentinel idea is not adopted
+  (it only moves the failure line). Proven by a deterministic
+  regression test (`wave8_pg_smoke_poller_spawn_cutoff`: block the
+  thread 2 s, insert from a second thread, assert delivery — fails
+  on the old code, passes with the fix). The regression test is the
+  file's second pg smoke, so both pg tests hold a tokio mutex for
+  their whole body — they share one DB and both drop/re-create the
+  schema. The temporary logging is
+  reverted in the same change.
 
 ### PR-4 Staging Deployment (not started)
 
