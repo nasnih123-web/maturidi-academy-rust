@@ -149,8 +149,10 @@ jobs:
           path: sbom.spdx.json
 
   alembic:
-    # Locked-base migration check (ADR-151). Checks out the ORIGINAL
-    # repo at the locked SHA (read-only), runs its Alembic migrations
+    # Locked-base migration check (ADR-151, ADR-155). Checks out the ORIGINAL
+    # repo at main and recreates the locked base by merging PR #193 + #194
+    # (read-only; the locked merge commit was never pushed, so it is proven
+    # by tree hash in scripts/alembic-check.sh), runs its Alembic migrations
     # against a pgvector Postgres service, and proves the Rust binary's
     # /ready against the migrated schema. Everything it asserts lives in
     # scripts/alembic-check.sh so the same check runs locally.
@@ -170,18 +172,32 @@ jobs:
           --health-timeout=5s
           --health-retries=10
     env:
-      LOCKED_BASE_SHA: 5d1cb02bf7665ad04cf13e32360759de47443ff8
+      LOCKED_TREE: 73422149c202d8b4e0a4a1c0bcc8dba3f79239f0
       ALEMBIC_HEAD: f2a3b4c5d6e7
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/alembic_check
       RUST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/alembic_check
     steps:
       - uses: actions/checkout@v4
-      - name: Check out the original repo at the locked base (read-only)
+      - name: Check out the original repo at main (read-only)
         uses: actions/checkout@v4
         with:
           repository: nasnih123-web/maturidi-academy
-          ref: 5d1cb02bf7665ad04cf13e32360759de47443ff8
+          ref: 9154d17b9adb4f97a3ed0f956b69c1c133757a74
           path: original
+          fetch-depth: 0
+      - name: Recreate the locked base from PR #193 and #194 (read-only)
+        # The locked-base merge commit 5d1cb02 was created locally and never
+        # pushed to the original repo, so it cannot be checked out by SHA
+        # (ADR-155). Merging the same two PR heads onto the same main
+        # reproduces the locked base's content; scripts/alembic-check.sh
+        # proves it by tree hash. Nothing is pushed anywhere.
+        working-directory: original
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin refs/pull/193/head:pr-193 refs/pull/194/head:pr-194
+          git merge --no-ff pr-193 -m "Merge PR #193 (recreate locked base)"
+          git merge --no-ff pr-194 -m "Merge PR #194 (recreate locked base)"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
