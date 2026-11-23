@@ -45,22 +45,21 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
-    env:
-      # NO Redis service in this job, on purpose (ADR-154). Most test
-      # configs use Config::default(), whose redis_url is
-      # redis://localhost:6379/0 — a live Redis on that port makes every
-      # binary share the auth rate-limit counter (same test IP) and the
-      # suite 429s itself (proven locally, twice). Redis coverage lives
-      # in the separate `redis` job below. Likewise REDIS_URL is never
-      # set here: it would not even help, because the test configs do
-      # not read the environment.
-      #
-      # Postgres is deliberately NOT wired here either. The PG smokes
-      # share one database and must run one binary at a time (each
-      # smoke drops and re-creates the schema); with WAVE2_PG_URL set
-      # globally, plain `cargo test` would run them in parallel and
-      # they would clobber each other's schema. The sequential step
-      # below is the only place WAVE2_PG_URL is set.
+    # NOTE — no Redis service in this job, on purpose (ADR-154). Most test
+    # configs use Config::default(), whose redis_url is
+    # redis://localhost:6379/0 — a live Redis on that port makes every
+    # binary share the auth rate-limit counter (same test IP) and the
+    # suite 429s itself (proven locally, twice). Redis coverage lives
+    # in the separate `redis` job below. Likewise REDIS_URL is never
+    # set here: it would not even help, because the test configs do
+    # not read the environment.
+    #
+    # Postgres is deliberately NOT wired here either. The PG smokes
+    # share one database and must run one binary at a time (each
+    # smoke drops and re-creates the schema); with WAVE2_PG_URL set
+    # globally, plain `cargo test` would run them in parallel and
+    # they would clobber each other's schema. The sequential step
+    # below is the only place WAVE2_PG_URL is set.
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
