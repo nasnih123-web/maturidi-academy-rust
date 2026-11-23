@@ -457,6 +457,60 @@ async fn wait_event(client: &mut WsClient, event_type: &str, timeout: Duration) 
     }
 }
 
+/// Read text messages until one parses as JSON with `"type"` equal to
+/// `frame_type`, skipping any other frame — live `{"type":"event"}`
+/// frames the outbox poller broadcasts between the client's message
+/// and the server's ack, and server `{"type":"ping"}` frames (answered
+/// with `{"type":"pong"}`). The poller ticks every second and can land
+/// mid-handshake, so a bare "next frame" read races with it (ADR-165).
+async fn wait_frame_type(
+    client: &mut WsClient,
+    frame_type: &str,
+    timeout: Duration,
+) -> Option<Value> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            return None;
+        }
+        let text = client.next_text(left).await?;
+        let value: Value = serde_json::from_str(&text).ok()?;
+        if value["type"] == "ping" {
+            client.send_text(r#"{"type":"pong"}"#).await;
+            continue;
+        }
+        if value["type"] == frame_type {
+            return Some(value);
+        }
+    }
+}
+
+/// Read text messages until one parses as JSON with `"type": "event"`
+/// and the expected `event_id`, skipping any other frame (same
+/// interleaved-live-frame race as `wait_frame_type`: a live broadcast
+/// of the same event can arrive before the server's replay of it, and
+/// a replayed duplicate can arrive after the live one — either order
+/// satisfies the wait, and the next wait skips the duplicate).
+async fn wait_event_id(client: &mut WsClient, event_id: &str, timeout: Duration) -> Option<Value> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            return None;
+        }
+        let text = client.next_text(left).await?;
+        let value: Value = serde_json::from_str(&text).ok()?;
+        if value["type"] == "ping" {
+            client.send_text(r#"{"type":"pong"}"#).await;
+            continue;
+        }
+        if value["type"] == "event" && value["event_id"] == event_id {
+            return Some(value);
+        }
+    }
+}
+
 // ============================ lift surfaces ============================
 
 #[tokio::test]
@@ -833,42 +887,38 @@ async fn ws_resume_replay_from_query_and_live_message() {
     // Handshake replay: ?last_event_id=<first> + channels=probe.*
     // replays two and three, in order, without repeating one. The
     // first frame is the {"type":"subscribed"} ack for the handshake
-    // channel, then the replayed events follow.
+    // channel, then the replayed events follow. The outbox poller can
+    // broadcast a live copy of one of the probe events before the ack
+    // or between the replayed frames (ADR-165), so each read waits for
+    // the frame it expects and skips the interleaved ones instead of
+    // assuming the next frame is the wanted one.
     let ticket = ws_ticket(&env, &token).await;
     let addr = serve(env.router()).await;
     let target = format!("/ws/events?ticket={ticket}&channels=probe.*&last_event_id={first}");
     let mut client = WsClient::connect(addr, &target, &[]).await;
-    let ack = client
-        .next_text(Duration::from_secs(5))
+    let ack = wait_frame_type(&mut client, "subscribed", Duration::from_secs(5))
         .await
         .expect("subscribed ack");
-    assert_eq!(
-        serde_json::from_str::<Value>(&ack).unwrap()["type"],
-        json!("subscribed")
-    );
-    let replayed = client
-        .next_text(Duration::from_secs(5))
+    assert_eq!(ack["type"], json!("subscribed"));
+    let value = wait_event_id(&mut client, &second.to_string(), Duration::from_secs(5))
         .await
         .expect("replay 1");
-    let value: Value = serde_json::from_str(&replayed).unwrap();
     assert_eq!(value["type"], json!("event"));
     assert_eq!(value["event_id"], json!(second.to_string()));
-    let replayed = client
-        .next_text(Duration::from_secs(5))
+    let value = wait_event_id(&mut client, &third.to_string(), Duration::from_secs(5))
         .await
         .expect("replay 2");
-    let value: Value = serde_json::from_str(&replayed).unwrap();
     assert_eq!(value["event_id"], json!(third.to_string()));
     // Live resume: replays nothing new (cursor is already at the
-    // newest event) and answers {"type":"resumed"}.
+    // newest event) and answers {"type":"resumed"}. A live event frame
+    // can arrive before the ack (ADR-165), so wait for the resumed
+    // frame instead of reading a single next frame.
     client
         .send_text(&format!(r#"{{"type":"resume","last_event_id":"{third}"}}"#))
         .await;
-    let resumed = client
-        .next_text(Duration::from_secs(5))
+    let value = wait_frame_type(&mut client, "resumed", Duration::from_secs(5))
         .await
         .expect("resumed");
-    let value: Value = serde_json::from_str(&resumed).unwrap();
     assert_eq!(value["type"], json!("resumed"));
     assert_eq!(value["last_event_id"], json!(third.to_string()));
 }
