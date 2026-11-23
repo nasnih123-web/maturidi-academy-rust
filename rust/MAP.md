@@ -102,7 +102,7 @@ Wave 9 PR-3 work, not porting decisions).
 - Equivalence bar for floats, error text, validation errors: status + error
   shape pinned, exact Pydantic wording not reproduced (ADR-006).
 
-## Port progress — Waves 1–8 (complete) + Wave 9 (PR-2 in progress)
+## Port progress — Waves 1–8 (complete) + Wave 9 (PR-3 in progress)
 
 - Wave 1 (done, verified green locally): Axum front door, `GET /health`,
   `GET /ready`, proxy fallback to `ORIGIN_URL`. See ADR-007 / ADR-013.
@@ -488,7 +488,7 @@ Wave 9 PR-3 work, not porting decisions).
   - Not yet ported in Wave 2 (stubs / Wave 7): real mail/SMS delivery,
     ClamAV scan, S3 storage (see ADR-015).
 
-## Wave 9 — Production Readiness (PR-2 in progress)
+## Wave 9 — Production Readiness (PR-3 in progress)
 
 Goal: prepare the Rust backend for a real build, test and deployment on
 an **independent** Railway project. Standing rules (user directive
@@ -547,15 +547,19 @@ Full corrections in ADR-148.
   and on local Postgres when `WAVE2_PG_URL` is set); cases under
   `rust/app-cases/wave9/`.
 
-### PR-2 CI and Build Verification (in progress)
+### PR-2 CI and Build Verification (merged as PR #2, 2026-11-23)
 
 Four CI jobs, all merge gates — a failing run blocks the PR
-(ADR-149/150/151/153/154). Branch protection is the enforcement: the repo must
-require the checks `rust`, `redis`, `docker` and `alembic` on `main` (Settings →
-Branches → branch protection rule for `main` → "Require status checks
-to pass"). **That setting is a manual follow-up — it is NOT done by
-this PR and must not be claimed as done.** Until it is set, the gates
-exist but nothing enforces them.
+(ADR-149/150/151/153/154). **Merged as `2a204d0`** (merge commit,
+parents `f10b5cc` + `724ef81`, branch `wave9/pr-2-ci-build-verification`
+retained); CI green on the branch (#91 push + #92 PR, all four jobs)
+and on main (#93, all four jobs green, ~24 min). Local verification:
+339 tests green, release build green, `alembic-check.sh` PASS.
+**Branch protection is DONE (2026-11-23 ~10:15):** the rule on `main`
+requires the checks `rust`, `redis`, `docker`, `alembic`, does not
+allow bypassing (applies to admins too), no required approvals;
+GitHub sudo-mode was confirmed by the user entering the emailed
+one-time code himself in the live browser.
 
 | Gate (job) | What runs | Service images | What it proves that local runs cannot |
 |---|---|---|---|
@@ -578,12 +582,13 @@ exist but nothing enforces them.
 - **Docker (ADR-150):** `docker/build-push-action@v6`, `push: false`,
   `load: true`, tag `maturidi-api-rs:ci`. SBOM is SPDX JSON from syft
   on the built image (OS packages + binary), uploaded as artifact
-  `sbom`. `cargo audit` fails the run on any RUSTSEC advisory except
-  the two named in ADR-152 (`--ignore RUSTSEC-2023-0071` rsa and
-  `--ignore RUSTSEC-2026-0459` libsqlite3-sys — no patch upgrade exists
-  inside sqlx 0.8; the sqlx 0.9 upgrade is a PR-3 open item). The first
-  audit also surfaced chrono RUSTSEC-2026-0543 as a warning only (no
-  fixed upgrade; recorded in ADR-152, no ignore needed).
+  `sbom`. `cargo audit` fails the run on any RUSTSEC advisory. The
+  two named exceptions from ADR-152 (`--ignore RUSTSEC-2023-0071`
+  rsa and `--ignore RUSTSEC-2026-0459` libsqlite3-sys) were **closed
+  by PR-3 (ADR-157)**: sqlx 0.9.1 + libsqlite3-sys 0.40.0, audit
+  clean with no ignores. The first audit also surfaced chrono
+  RUSTSEC-2026-0543 as a warning only (no fixed upgrade; recorded
+  in ADR-152, no ignore needed).
 - **Alembic (ADR-151, fixed by ADR-155):** the original repo is checked out at main `9154d17` (read-only) and the locked base is recreated by merging PR #193 + #194 — the locked-base merge commit `5d1cb02` was never pushed and cannot be checked out by SHA. `scripts/alembic-check.sh` proves the checkout is the locked base by TREE hash (`73422149…`, ADR-155), then asserts single head `f2a3b4c5d6e7`, runs `alembic upgrade head`,
   verifies version row + `vector`/`pg_trgm` + 120 tables (119 app +
   `alembic_version`), then serves the Rust release binary's /ready
@@ -600,7 +605,89 @@ exist but nothing enforces them.
   `rust/app-cases/wave9/`. `RateLimiter` is newly re-exported from the
   crate root so the tests can reach it.
 
-### PR-3 / PR-4 (not started)
+### PR-3 Production Blockers (this PR)
+
+Closes the gaps PR-1/PR-2 left open. Full record: ADR-157–164;
+contract docs under `rust/app-cases/wave9/`;
+**`rust/RELEASE_BLOCKERS.md`** is the single registry of everything
+that still blocks cutover (each entry: what / why it blocks / what
+unblocks it / owner PR).
+
+- **Real email + SMS (ADR-158):** the Wave 2 stub is gone.
+  `mail.rs` sends for real — Resend HTTPS API preferred, SMTP
+  (STARTTLS, lettre) fallback, Kavenegar SMS — credentials only
+  from env (`RESEND_API_KEY`, `SMTP_*`, `SMS_API_KEY`); unset or
+  unreachable fails honestly (`Result<(), MailError>`), never a fake
+  success. Auth flows stay best-effort (token stored, failure logged,
+  resend works); the admin broadcast path now records the real
+  per-channel outcome instead of marking every attempted send
+  delivered. Verification/reset emails render real bodies from
+  `mail_templates.rs` (fa/ar/en copy, locale rule, `public_url`
+  validation) instead of empty strings. Mock-transport tests prove
+  request shape and error paths with no real network call; a real
+  delivery is a PR-4 staging proof (Release Blockers #1) — no live
+  Resend/Kavenegar key exists here.
+- **Sidecar contract hardened (ADR-159):** per-route timeouts
+  (fatwa ask 300 s, hifz ASR 300 s, voice 180 s, receipt 60 s;
+  `SIDECAR_TIMEOUT_SECS` overrides), per-route body caps (fatwa
+  1 MB, audio 32 MB — the Python-equivalent error codes), streaming
+  upstream bodies (SSE is no longer buffered), no retries (none of
+  these POSTs is idempotent). Contract:
+  `rust/app-cases/wave9/sidecar-contract.md`. Mock-sidecar tests
+  prove forward-on-success, honest 503s and SSE streaming; the real
+  sidecar pairing is PR-4 (Release Blockers #2).
+- **Python workers (ADR-160):** verified as far as locally possible
+  — real ARQ 0.28.0 + real Redis: a job enqueues with the real call
+  shape and is processed end-to-end for the media queue; the real
+  `app.core.queues` registry loads with the documented settings;
+  the real media startup gate runs and fails loud here (tesseract +
+  faster-whisper missing). The real `app.worker` processes are a
+  PR-4 staging proof (Release Blockers #3). Evidence:
+  `rust/app-cases/wave9/workers-verification.md`.
+- **Durable storage decided + implemented (ADR-162):**
+  **S3-compatible is the production provider** (local is dev/test
+  only) — decided by the product's own history (the 2026-11-19
+  receipt-image loss) and the original's storage policy. `storage.rs`
+  dispatches local vs S3 (SigV4 over reqwest); boot validation
+  (production fail-fast, ported from Python) refuses bad S3 config
+  instead of silently falling back to local. Migration procedure:
+  `rust/app-cases/wave9/storage-migration.md`. Bucket provisioning
+  + live round-trip + migration run are PR-4 (Release Blockers #4).
+- **Upload limits fixed (ADR-161) + avatar scan (ADR-164):** the axum 2 MB router default
+  was silently capping every upload above 2 MB (only donate/manual
+  had disabled it). The default is now disabled on exactly the
+  upload routes whose handler caps exceed 2 MB, so the ported Python
+  caps (library 512 MB / 5 MB, receipt/avatar/font 5 MB, audio
+  32 MB) are the real limits again — restored, not raised. The scan
+  gate (ADR-051) is unchanged — and the avatar upload, which still
+  carried the old ClamAV gate (503 in production, no daemon in the
+  deployment), now runs the same ADR-051 scanner (EICAR + blocklist,
+  422 `file_infected`); the scanner is extracted into one shared
+  module used by all four upload paths, and the dead
+  `CLAMAV_ALLOW_INSECURE_DEV_BYPASS` flag is removed.
+- **sqlx 0.8 → 0.9 (ADR-157):** sqlx 0.9.1 + libsqlite3-sys 0.40.0;
+  `rsa` gone from the tree; `cargo audit` exits 0 with **no
+  ignores** — both `--ignore` flags removed from `ci.yml`. The
+  upgrade's one breaking change (`SqlSafeStr`) is fixed at a single
+  audited choke point in `db.rs` (dynamic-SQL audit recorded there).
+- **Tests:** `rust/app/tests/wave9_pr3.rs` (24 tests: mock mail/SMS
+  transports, mock sidecar, SigV4 vectors + mock S3, upload-limit
+  proofs) + cases `pr3-01`–`pr3-04` under `rust/app-cases/wave9/`.
+  Full suite after PR-3: **363 passed, 0 failed across 19 binaries**
+  (339 pre-PR-3 + 24 new), fmt + clippy clean, `cargo audit` exits
+  0 with no ignores, `scripts/alembic-check.sh` PASS, release build
+  green. (One suite run during PR-3 failed every pg_smoke with
+  exactly 1 failure per binary — the cause was a VM replacement
+  that wiped Postgres; see TOOLS.md. The code was never at fault.)
+
+### PR-4 Staging Deployment (not started)
+
+PR-4 works through **`rust/RELEASE_BLOCKERS.md`** with evidence:
+new Railway project, independent Postgres + Redis, migrations on
+the test DB, sidecar + workers running, Rust deploy, cutover
+preflight, end-to-end tests, load test + FastAPI comparison,
+backup/restore + rollback test. Until the list is empty, no DNS,
+live domain, or real user traffic changes.
 
 ## Units (status)
 
