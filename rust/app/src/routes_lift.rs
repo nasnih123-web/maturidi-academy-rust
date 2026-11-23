@@ -857,34 +857,23 @@ async fn fetch_recent_events(db: &Db, limit: usize) -> Vec<StoredEvent> {
     );
     let rows = match db.fetch_all(&sql, &[]).await {
         Ok(r) => r,
-        Err(e) => {
-            // TEMPORARY diagnostic logging; revert after the CI log is read.
-            eprintln!("[poller-diag] fetch_recent_events ERROR limit={limit}: {e:?}");
-            return Vec::new();
-        }
+        Err(_) => return Vec::new(),
     };
-    let row_count = rows.len();
     let mut events = Vec::new();
-    let mut skipped = 0usize;
     for row in rows {
         let Ok(event_id) = row.try_get::<Uuid, _>("event_id") else {
-            skipped += 1;
             continue;
         };
         let Ok(event_type) = row.try_get::<String, _>("event_type") else {
-            skipped += 1;
             continue;
         };
         let Ok(aggregate_type) = row.try_get::<String, _>("aggregate_type") else {
-            skipped += 1;
             continue;
         };
         let Ok(aggregate_id) = row.try_get::<String, _>("aggregate_id") else {
-            skipped += 1;
             continue;
         };
         let Ok(created_at) = row.try_get::<DateTime<Utc>, _>("created_at") else {
-            skipped += 1;
             continue;
         };
         let schema_version = row.try_get::<i32, _>("schema_version").unwrap_or(1) as i64;
@@ -903,22 +892,22 @@ async fn fetch_recent_events(db: &Db, limit: usize) -> Vec<StoredEvent> {
         });
     }
     events.reverse();
-    // TEMPORARY diagnostic logging; revert after the CI log is read.
-    eprintln!(
-        "[poller-diag] fetch_recent_events limit={limit} rows={row_count} parsed={} skipped={skipped}",
-        events.len()
-    );
     events
 }
 
 /// The outbox poller: one per `AppState` (guarded by
 /// `poller_started`, so the test harness's repeated `build_router`
-/// calls never fan an event out twice). It starts its watermark at
-/// the newest row present at spawn, then polls every
-/// `dispatcher_poll_interval` seconds for newer rows and broadcasts
-/// them. `emit_event` is the only writer, so polling the outbox is
-/// the whole delivery path — exactly the role Python's dispatcher
-/// bus plays for `broadcast_event`.
+/// calls never fan an event out twice). Its watermark starts at the
+/// spawn instant (ADR-168): the cutoff is captured synchronously in
+/// `spawn_realtime_poller` as `(spawned_at, Uuid::nil())`, so any
+/// row created after spawn is delivered even if the spawned task's
+/// first poll runs seconds late (the old code captured the newest
+/// row inside the task, which silently dropped any event inserted
+/// before that first poll — the wave8_pg_smoke CI failure). It then
+/// polls every `dispatcher_poll_interval` seconds for newer rows and
+/// broadcasts them. `emit_event` is the only writer, so polling the
+/// outbox is the whole delivery path — exactly the role Python's
+/// dispatcher bus plays for `broadcast_event`.
 pub fn spawn_realtime_poller(state: &AppState) {
     let Some(db) = state.db.clone() else {
         return;
@@ -928,39 +917,32 @@ pub fn spawn_realtime_poller(state: &AppState) {
     }
     let hub = state.ws_hub.clone();
     let interval = Duration::from_secs_f64(state.config.dispatcher_poll_interval.max(0.05));
+    // ADR-168: capture the cutoff synchronously, before spawning.
+    // The task's first poll may run seconds after spawn (on a
+    // single-thread runtime a synchronous block — e.g. the argon2
+    // register/login hashes in the tests — delays it past inserts),
+    // so the watermark must be a time, not the newest row at first
+    // poll: with a nil-UUID tiebreak, every row created after spawn
+    // is strictly newer than the cutoff and gets delivered. Rows
+    // created before spawn are skipped, as before. (A row created
+    // within the same microsecond as spawn — PG stores TIMESTAMPTZ
+    // at microsecond precision — is at most a 1 µs race window, and
+    // delivering such a row once is harmless.)
+    let spawned_at = Utc::now();
     tokio::spawn(async move {
-        // TEMPORARY diagnostic logging; revert after the CI log is read.
-        // All [poller-diag] lines in this task are temporary.
-        let spawned_at = tokio::time::Instant::now();
-        let mut watermark: Option<(DateTime<Utc>, Uuid)> = None;
-        if let Some(first) = fetch_recent_events(&db, 1).await.into_iter().last() {
-            watermark = Some((first.created_at, first.event.event_id));
-        }
-        eprintln!(
-            "[poller-diag] first run after {:?}: watermark={watermark:?}",
-            spawned_at.elapsed()
-        );
+        let mut watermark: Option<(DateTime<Utc>, Uuid)> = Some((spawned_at, Uuid::nil()));
         loop {
             tokio::time::sleep(interval).await;
-            let fetched = fetch_recent_events(&db, 200).await;
-            let fetched_count = fetched.len();
-            let mut sent = 0usize;
-            let mut skipped = 0usize;
-            for stored in fetched {
+            for stored in fetch_recent_events(&db, 200).await {
                 let key = (stored.created_at, stored.event.event_id);
                 if let Some(wm) = watermark {
                     if key <= wm {
-                        skipped += 1;
                         continue;
                     }
                 }
                 watermark = Some(key);
                 let _ = hub.sender.send(stored.event);
-                sent += 1;
             }
-            eprintln!(
-                "[poller-diag] tick: fetched={fetched_count} sent={sent} skipped={skipped} watermark={watermark:?}"
-            );
         }
     });
 }
