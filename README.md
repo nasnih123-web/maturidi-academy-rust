@@ -7,21 +7,18 @@ Rust rewrite of the Maturidi Academy API server.
 - **Base (locked):** original `main` at `9154d17` (merge #192) + PR #193 (player design 1) + PR #194 (CRM subtitle cue editor), merged cleanly with no conflicts into local branch `rust-base` in the original repo. **Locked migration base SHA: `5d1cb02bf7665ad04cf13e32360759de47443ff8`** (merge of PR #194; parents `c414abb` + `e22b71d`; verified 2026-11-22). The base does not move: any later original-repo change is out of scope unless a new decision re-locks it.
 - **Method:** [rust-anything](https://github.com/erkamyaman/rust-anything) 3.1.0 — record the original's behaviour, port one piece at a time, prove each piece with `app record` / `app replay` and `gate`. See `rust/MAP.md` and `rust/DECISIONS.md`.
 - **Status:** Wave 8 (lift) done — the full API is pure Rust (471 route+method combos served: 463 native + 8 explicit sidecar-contract routes), the catch-all proxy is gone, and the whole app-cases replay passes locally. Nothing is deployed yet. The live project is untouched, and any future deploy would be on a new Railway server, fully separate (see `scripts/cutover.sh` + `scripts/cutover-README.md`).
-- **Wave 9 (Production Readiness, in progress):** PR-1 architecture + cutover reconciliation (merged as PR #1), then PR-2 CI + build verification (in progress), PR-3 production blockers, PR-4 staging deploy on a NEW Railway project. Standing rules for Wave 9: **UIs (web, CRM, mobile, desktop) stay TypeScript — no Rust UI rewrite**; the live project, its domains/DNS and its database are never touched; every change goes in an independent PR with tests and docs; a PR is never declared complete on SQLite tests alone.
+- **Wave 9 (Production Readiness, in progress):** PR-1 architecture + cutover reconciliation (merged as PR #1), PR-2 CI + build verification (merged as PR #2), PR-3 production blockers (in progress), PR-4 staging deploy on a NEW Railway project. Standing rules for Wave 9: **UIs (web, CRM, mobile, desktop) stay TypeScript — no Rust UI rewrite**; the live project, its domains/DNS and its database are never touched; every change goes in an independent PR with tests and docs; a PR is never declared complete on SQLite tests alone. What still blocks cutover is registered in **`rust/RELEASE_BLOCKERS.md`** (ADR-163) — an entry leaves that list only when its unblock condition is proven.
 
 ## CI
 
 `.github/workflows/ci.yml` has four jobs, all merge gates (a failing
-run blocks the PR — branch protection must require the checks `rust`,
-`redis`, `docker` and `alembic` on `main`; that repo setting is a manual
-follow-up, not something the workflow can enable — see `rust/MAP.md`,
-Wave 9 PR-2):
+run blocks the PR — branch protection requires the checks `rust`,
+`redis`, `docker` and `alembic` on `main`; set 2026-11-23, see
+`rust/MAP.md`, Wave 9 PR-2):
 
 - **`rust`** — fmt, clippy, `cargo build --release --locked`,
   `cargo test` (SQLite), the PostgreSQL smokes run sequentially (one
-  binary at a time, `WAVE2_PG_URL` set only there), and `cargo audit` (fails on any RUSTSEC advisory except the two named
-  in ADR-152 — rsa RUSTSEC-2023-0071 and libsqlite3-sys
-  RUSTSEC-2026-0459, both unfixable inside sqlx 0.8). Service:
+  binary at a time, `WAVE2_PG_URL` set only there), and `cargo audit` (fails on any RUSTSEC advisory — the two ADR-152 exceptions were closed by PR-3, ADR-157: sqlx 0.9.1 + libsqlite3-sys 0.40.0, audit clean with no ignores). Service:
   `pgvector/pgvector:pg16`. No Redis service here, on purpose
   (ADR-154): a live Redis at localhost:6379 is the test configs'
   default `redis_url`, and every binary would share the auth
