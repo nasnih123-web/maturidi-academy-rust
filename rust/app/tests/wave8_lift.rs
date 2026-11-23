@@ -9,9 +9,10 @@
 //! Each test builds a fresh in-memory sqlite DB (`TEST_SCHEMA`) and a
 //! fresh `AppState`, then drives the real Axum router — `oneshot` for
 //! HTTP, a bound `127.0.0.1:0` listener for WebSocket. The Postgres
-//! smoke at the end (`wave8_pg_smoke`, gated on `WAVE2_PG_URL`)
-//! replays metrics + health + openapi + a live WS event on local
-//! Postgres.
+//! smokes at the end (`wave8_pg_smoke` + `wave8_pg_smoke_poller_spawn_cutoff`,
+//! gated on `WAVE2_PG_URL`) replay metrics + health + openapi + a live WS event
+//! on local Postgres, and prove the poller delivers an event inserted
+//! while its first poll is still unpolled (ADR-168).
 
 use axum::{
     body::Body,
@@ -56,6 +57,16 @@ struct Env {
     state: AppState,
     db: Db,
 }
+
+/// Serializes the two Postgres smokes in this file: they share one DB
+/// and both drop/re-create the schema, so running them in parallel (a
+/// plain `cargo test --test wave8_lift` runs tests concurrently) makes
+/// one test's `init_test_schema` fail while the other drops the tables.
+/// A tokio mutex (not std) so the guard may be held across awaits; the
+/// two tests run on different harness threads, so no deadlock. The CI
+/// pg_smoke loop already runs with --test-threads=1, where the lock is
+/// uncontended.
+static PG_SMOKE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 impl Env {
     async fn sqlite() -> Self {
@@ -1108,6 +1119,8 @@ async fn wave8_pg_smoke() {
     let Some(url) = std::env::var("WAVE2_PG_URL").ok() else {
         return;
     };
+    // Serialize with the other pg smoke in this file (shared DB).
+    let _pg_guard = PG_SMOKE_LOCK.lock().await;
     let db = Db::connect(&url).await.expect("pg connect");
     // The smokes share one DB: drop every TEST_SCHEMA table first, like
     // the wave2/wave8/wave8_projects smokes — plain CREATE TABLE in
@@ -1193,4 +1206,100 @@ async fn wave8_pg_smoke() {
     );
     let got = got.expect("live event on pg");
     assert_eq!(got["event_id"], json!(event_id.to_string()));
+}
+
+/// ADR-168 regression: the poller's watermark is the spawn instant,
+/// not the newest row at first poll. The spawned task's first poll
+/// can run seconds late — on this single-thread test runtime a
+/// synchronous block (e.g. the argon2 register/login hashes) delays
+/// it past inserts — so an event inserted while the task is still
+/// unpolled must still be delivered. Pre-fix this test failed
+/// deterministically: the first fetch captured the event as the
+/// watermark and it was never delivered (proven by the CI log on
+/// HEAD bf94882: first run 3.54 s after spawn, 286 ticks
+/// fetched=4 sent=0 skipped=4). The insert happens on a second
+/// thread while this thread is blocked, exactly like the failing
+/// CI timing; a direct hub receiver (no WS handshake, no heartbeat)
+/// is the probe.
+#[tokio::test]
+async fn wave8_pg_smoke_poller_spawn_cutoff() {
+    let Some(url) = std::env::var("WAVE2_PG_URL").ok() else {
+        return;
+    };
+    // Serialize with the other pg smoke in this file (shared DB).
+    let _pg_guard = PG_SMOKE_LOCK.lock().await;
+    let db = Db::connect(&url).await.expect("pg connect");
+    // Fresh schema, exactly like wave8_pg_smoke.
+    let mut tables = Vec::new();
+    for part in TEST_SCHEMA.split("CREATE TABLE") {
+        let name: String = part
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            tables.push(name);
+        }
+    }
+    for table in tables {
+        db.execute(&format!("DROP TABLE IF EXISTS {table} CASCADE"), &[])
+            .await
+            .unwrap();
+    }
+    init_test_schema(&db).await.expect("pg test schema");
+    let state = AppState::with_db(test_config(), Some(db.clone()));
+    let env = Env { state, db };
+    // Spawns the poller; the receiver is subscribed before the block
+    // so no broadcast is missed.
+    let _router = env.router();
+    let mut rx = env.state.ws_hub.sender.subscribe();
+    // Insert the event from another thread while this thread is
+    // blocked: the poller task cannot run its first poll until the
+    // block ends, so the insert lands strictly after spawn but
+    // before the first poll. The insert uses a fresh pool on the
+    // helper thread's own runtime: the main pool belongs to the
+    // blocked test runtime and cannot hand out a connection from
+    // here (a shared-pool acquire waits out sqlx's 30 s default
+    // and fails).
+    let insert_url = url.clone();
+    let inserter = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("inserter runtime");
+        rt.block_on(async {
+            let db2 = Db::connect(&insert_url).await.expect("pg connect");
+            let event_id = Uuid::new_v4();
+            db2
+                .execute(
+                    "INSERT INTO domain_events (event_id, idempotency_key, aggregate_type, aggregate_id, \
+                     event_type, payload, schema_version, source_client, created_at, retry_count) \
+                     VALUES (?, NULL, ?, ?, ?, ?, 1, 'api', ?, 0)",
+                    &[
+                        event_id.into_arg(),
+                        "probe".into_arg(),
+                        "p".into_arg(),
+                        "probe.late".into_arg(),
+                        json!({"probe": true}).into_arg(),
+                        Utc::now().into_arg(),
+                    ],
+                )
+                .await
+                .expect("insert late event");
+            event_id
+        })
+    });
+    // Block the single-thread runtime for 2 s: the poller task's
+    // first poll cannot run while this thread sleeps.
+    std::thread::sleep(Duration::from_secs(2));
+    let event_id = inserter.join().expect("inserter thread");
+    // The poller ticks every 50 ms in this config; the late event
+    // must arrive despite the first poll running after the insert.
+    let got = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("late event delivered within 5 s");
+    let got = got.expect("broadcast recv");
+    assert_eq!(got.event_type, "probe.late");
+    assert_eq!(got.event_id, event_id);
 }
