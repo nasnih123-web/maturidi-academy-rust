@@ -2,17 +2,18 @@
 # Wave 9 PR-2 — locked-base Alembic check (ADR-151).
 #
 # Verifies, against a real Postgres, that the ORIGINAL repo at the locked
-# migration base (SHA in LOCKED_BASE_SHA) has a single Alembic head, that
+# migration base (tree hash in LOCKED_TREE) has a single Alembic head, that
 # `alembic upgrade head` migrates cleanly, and that the Rust binary's
 # /ready answers against the migrated schema. The same script runs in CI
 # (workflow job `alembic`) and locally, so the CI gate is reproducible.
 #
 # Run from the Rust repo root:
-#   LOCKED_BASE_SHA=5d1cb02bf7665ad04cf13e32360759de47443ff8 \
 #   bash scripts/alembic-check.sh
 #
 # Inputs (all have defaults for a local run; CI sets them explicitly):
-#   LOCKED_BASE_SHA   SHA of the locked base (default: the PR-1 value)
+#   LOCKED_TREE       tree hash of the locked base (default: the PR-1 value)
+#                     The merge commit SHA is NOT used: it was created locally
+#                     and never pushed, so GitHub cannot check it out (ADR-155).
 #   ALEMBIC_HEAD      expected single head (default f2a3b4c5d6e7)
 #   DATABASE_URL      asyncpg URL for Alembic
 #                     (default postgresql+asyncpg://postgres:postgres@localhost:5432/alembic_check)
@@ -36,7 +37,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-LOCKED_BASE_SHA="${LOCKED_BASE_SHA:-5d1cb02bf7665ad04cf13e32360759de47443ff8}"
+LOCKED_TREE="${LOCKED_TREE:-73422149c202d8b4e0a4a1c0bcc8dba3f79239f0}"
 ALEMBIC_HEAD="${ALEMBIC_HEAD:-f2a3b4c5d6e7}"
 DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@localhost:5432/alembic_check}"
 RUST_DATABASE_URL="${RUST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/alembic_check}"
@@ -57,12 +58,19 @@ for cmd in python3 cargo curl git; do
 done
 
 # 1. The checkout is exactly the locked base — never a moving target.
-head_sha="$(git -C "$ORIGINAL_DIR" rev-parse HEAD)"
-if [ "$head_sha" != "$LOCKED_BASE_SHA" ]; then
-    echo "alembic-check: original checkout HEAD $head_sha != locked base $LOCKED_BASE_SHA" >&2
+# Identity is proven by TREE hash, not commit SHA: the locked-base merge
+# commit 5d1cb02 was created locally and never pushed to the original repo
+# (the original repo is never written to), so GitHub cannot check it out
+# by SHA. CI recreates the base by merging PR #193 + #194 onto main
+# (ADR-155); a merge of the same parents is content-identical, so its
+# tree hash must equal the locked base's tree hash.
+LOCKED_TREE="${LOCKED_TREE:-73422149c202d8b4e0a4a1c0bcc8dba3f79239f0}"
+tree="$(git -C "$ORIGINAL_DIR" rev-parse "HEAD^{tree}")"
+if [ "$tree" != "$LOCKED_TREE" ]; then
+    echo "alembic-check: original checkout tree $tree != locked base tree $LOCKED_TREE" >&2
     exit 1
 fi
-echo "alembic-check: original checkout is the locked base ($head_sha)"
+echo "alembic-check: original checkout matches the locked base tree ($tree)"
 
 # 2. Minimal Python env. Pins are copied from the original
 # apps/api/requirements.txt — nothing else is needed to import env.py
