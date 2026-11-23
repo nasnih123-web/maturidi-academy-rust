@@ -338,7 +338,14 @@ fn add_arg_sqlite(args: &mut SqliteArguments, arg: &Arg) {
 
 /// Rewrite `?` placeholders to `$1..$n` for Postgres. (No Wave 2 query
 /// contains a literal `?` inside a string.)
-fn to_pg_placeholders(sql: &str) -> String {
+/// Rewrite `?` placeholders to Postgres `$1`, `$2`, … — and nothing
+/// else. The SQL text itself is always a hardcoded literal from the
+/// call sites in this file; this function never interpolates a value
+/// (all values travel as bound arguments), so the rewritten string is
+/// safe by construction. sqlx 0.9 requires dynamic SQL to be marked
+/// audited (`SqlSafeStr`); the `AssertSqlSafe` wrapper is that mark,
+/// applied here — the single place where SQL text is ever rewritten.
+fn to_pg_placeholders(sql: &str) -> sqlx::AssertSqlSafe<String> {
     let mut out = String::with_capacity(sql.len() + 8);
     let mut n = 0;
     for c in sql.chars() {
@@ -349,7 +356,19 @@ fn to_pg_placeholders(sql: &str) -> String {
             out.push(c);
         }
     }
-    out
+    sqlx::AssertSqlSafe(out)
+}
+
+/// The sqlx 0.9 audit mark for a borrowed SQL string. Every SQL
+/// string that reaches the `Db` methods is either a hardcoded literal
+/// or built from code constants (`?`-placeholder counts,
+/// enum-derived table names, hardcoded `SET` column lists) with all
+/// values passed as bound arguments — audited 2026-11-23 (Wave 9
+/// PR-3, sqlx 0.9 upgrade); no caller interpolates user input into
+/// SQL. Keep that invariant: any future dynamically-built SQL must
+/// go through the same audit before it is passed here.
+fn safe_sql(sql: &str) -> sqlx::AssertSqlSafe<&str> {
+    sqlx::AssertSqlSafe(sql)
 }
 
 /// Shared database handle. `None` in `AppState` means no `DATABASE_URL`
@@ -413,7 +432,7 @@ impl Db {
                 for a in args {
                     add_arg_pg(&mut pg_args, a);
                 }
-                let row = sqlx::query_with(&to_pg_placeholders(sql), pg_args)
+                let row = sqlx::query_with(to_pg_placeholders(sql), pg_args)
                     .fetch_optional(pool)
                     .await?;
                 Ok(row.map(DynRow::Pg))
@@ -423,7 +442,7 @@ impl Db {
                 for a in args {
                     add_arg_sqlite(&mut lite_args, a);
                 }
-                let row = sqlx::query_with(sql, lite_args)
+                let row = sqlx::query_with(safe_sql(sql), lite_args)
                     .fetch_optional(pool)
                     .await?;
                 Ok(row.map(DynRow::Sqlite))
@@ -438,7 +457,7 @@ impl Db {
                 for a in args {
                     add_arg_pg(&mut pg_args, a);
                 }
-                let row = sqlx::query_with(&to_pg_placeholders(sql), pg_args)
+                let row = sqlx::query_with(to_pg_placeholders(sql), pg_args)
                     .fetch_one(pool)
                     .await?;
                 Ok(DynRow::Pg(row))
@@ -448,7 +467,9 @@ impl Db {
                 for a in args {
                     add_arg_sqlite(&mut lite_args, a);
                 }
-                let row = sqlx::query_with(sql, lite_args).fetch_one(pool).await?;
+                let row = sqlx::query_with(safe_sql(sql), lite_args)
+                    .fetch_one(pool)
+                    .await?;
                 Ok(DynRow::Sqlite(row))
             }
         }
@@ -461,7 +482,7 @@ impl Db {
                 for a in args {
                     add_arg_pg(&mut pg_args, a);
                 }
-                let rows = sqlx::query_with(&to_pg_placeholders(sql), pg_args)
+                let rows = sqlx::query_with(to_pg_placeholders(sql), pg_args)
                     .fetch_all(pool)
                     .await?;
                 Ok(rows.into_iter().map(DynRow::Pg).collect())
@@ -471,7 +492,9 @@ impl Db {
                 for a in args {
                     add_arg_sqlite(&mut lite_args, a);
                 }
-                let rows = sqlx::query_with(sql, lite_args).fetch_all(pool).await?;
+                let rows = sqlx::query_with(safe_sql(sql), lite_args)
+                    .fetch_all(pool)
+                    .await?;
                 Ok(rows.into_iter().map(DynRow::Sqlite).collect())
             }
         }
@@ -485,7 +508,7 @@ impl Db {
                 for a in args {
                     add_arg_pg(&mut pg_args, a);
                 }
-                let res = sqlx::query_with(&to_pg_placeholders(sql), pg_args)
+                let res = sqlx::query_with(to_pg_placeholders(sql), pg_args)
                     .execute(pool)
                     .await?;
                 Ok(res.rows_affected())
@@ -495,7 +518,9 @@ impl Db {
                 for a in args {
                     add_arg_sqlite(&mut lite_args, a);
                 }
-                let res = sqlx::query_with(sql, lite_args).execute(pool).await?;
+                let res = sqlx::query_with(safe_sql(sql), lite_args)
+                    .execute(pool)
+                    .await?;
                 Ok(res.rows_affected())
             }
         }

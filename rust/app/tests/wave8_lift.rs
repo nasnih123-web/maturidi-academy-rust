@@ -9,9 +9,10 @@
 //! Each test builds a fresh in-memory sqlite DB (`TEST_SCHEMA`) and a
 //! fresh `AppState`, then drives the real Axum router — `oneshot` for
 //! HTTP, a bound `127.0.0.1:0` listener for WebSocket. The Postgres
-//! smoke at the end (`wave8_pg_smoke`, gated on `WAVE2_PG_URL`)
-//! replays metrics + health + openapi + a live WS event on local
-//! Postgres.
+//! smokes at the end (`wave8_pg_smoke` + `wave8_pg_smoke_poller_spawn_cutoff`,
+//! gated on `WAVE2_PG_URL`) replay metrics + health + openapi + a live WS event
+//! on local Postgres, and prove the poller delivers an event inserted
+//! while its first poll is still unpolled (ADR-168).
 
 use axum::{
     body::Body,
@@ -56,6 +57,16 @@ struct Env {
     state: AppState,
     db: Db,
 }
+
+/// Serializes the two Postgres smokes in this file: they share one DB
+/// and both drop/re-create the schema, so running them in parallel (a
+/// plain `cargo test --test wave8_lift` runs tests concurrently) makes
+/// one test's `init_test_schema` fail while the other drops the tables.
+/// A tokio mutex (not std) so the guard may be held across awaits; the
+/// two tests run on different harness threads, so no deadlock. The CI
+/// pg_smoke loop already runs with --test-threads=1, where the lock is
+/// uncontended.
+static PG_SMOKE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 impl Env {
     async fn sqlite() -> Self {
@@ -264,11 +275,33 @@ async fn serve(router: Router) -> SocketAddr {
 
 // ============================ minimal WS client ============================
 
+#[derive(Debug)]
 enum Frame {
     Text(String),
     Close(u16),
     Ping(Vec<u8>),
     Other,
+}
+
+/// Outcome of reading one frame: `next_frame`'s `None` conflates a
+/// timeout with EOF on the socket (ADR-167).
+#[derive(Debug)]
+enum FrameOutcome {
+    Frame(Frame),
+    Timeout,
+    Eof,
+}
+
+/// Outcome of reading one text frame (ADR-167): `next_text`'s `None`
+/// conflates a timeout with a close frame / EOF, which hid which
+/// failure mode fired when a wait gave up in CI.
+#[derive(Debug)]
+enum TextOutcome {
+    Text(String),
+    /// Server close frame (with its code) or EOF on the socket.
+    Closed(Option<u16>),
+    /// No frame arrived within `timeout`.
+    Timeout,
 }
 
 struct WsClient {
@@ -387,12 +420,22 @@ impl WsClient {
 
     /// Next frame, auto-replying to WS-level pings. `None` on timeout.
     async fn next_frame(&mut self, timeout: Duration) -> Option<Frame> {
+        match self.next_frame_outcome(timeout).await {
+            FrameOutcome::Frame(frame) => Some(frame),
+            _ => None,
+        }
+    }
+
+    /// Like `next_frame`, but distinguishes the three ways the read can
+    /// end without a frame (ADR-167): `next_frame`'s `None` conflates a
+    /// timeout with EOF on the socket, which hid which failure mode
+    /// fired when a wait gave up in CI.
+    async fn next_frame_outcome(&mut self, timeout: Duration) -> FrameOutcome {
         loop {
-            let frame = tokio::time::timeout(timeout, self.read_frame())
-                .await
-                .ok()??;
-            match frame {
-                Frame::Ping(data) => {
+            match tokio::time::timeout(timeout, self.read_frame()).await {
+                Err(_) => return FrameOutcome::Timeout,
+                Ok(None) => return FrameOutcome::Eof,
+                Ok(Some(Frame::Ping(data))) => {
                     // Client frames must be masked.
                     let mask = [0x12, 0x34, 0x56, 0x78];
                     let mut pong = vec![0x8au8, 0x80 | (data.len() as u8)];
@@ -402,7 +445,7 @@ impl WsClient {
                     }
                     let _ = self.stream.write_all(&pong).await;
                 }
-                other => return Some(other),
+                Ok(Some(frame)) => return FrameOutcome::Frame(frame),
             }
         }
     }
@@ -414,6 +457,22 @@ impl WsClient {
                 Frame::Text(t) => return Some(t),
                 Frame::Close(_) => return None,
                 _ => {}
+            }
+        }
+    }
+
+    /// Like `next_text`, but distinguishes timeout / close / EOF instead
+    /// of collapsing them into one `None` (ADR-167).
+    async fn next_text_outcome(&mut self, timeout: Duration) -> TextOutcome {
+        loop {
+            match self.next_frame_outcome(timeout).await {
+                FrameOutcome::Frame(Frame::Text(t)) => return TextOutcome::Text(t),
+                FrameOutcome::Frame(Frame::Close(code)) => {
+                    return TextOutcome::Closed(Some(code));
+                }
+                FrameOutcome::Frame(_) => {}
+                FrameOutcome::Timeout => return TextOutcome::Timeout,
+                FrameOutcome::Eof => return TextOutcome::Closed(None),
             }
         }
     }
@@ -435,23 +494,197 @@ impl WsClient {
     }
 }
 
+/// One log line when a wait helper gives up (ADR-167): which failure
+/// path fired (TIMEOUT / STREAM ENDED / UNPARSEABLE) and after how
+/// long. Test output is captured by the harness and shown only when
+/// the test fails, so this is silent on green runs and a measurement
+/// on red ones.
+fn log_wait_gave_up(
+    helper: &str,
+    wanted: &str,
+    outcome: &str,
+    started: tokio::time::Instant,
+    timeout: Duration,
+) {
+    eprintln!(
+        "[{helper}] {outcome} after {:?} waiting for {wanted} (budget {timeout:?})",
+        started.elapsed()
+    );
+}
+
 /// Read text messages until one parses as JSON with `"type": "event"`
 /// and the expected `event_type` — server `{"type":"ping"}` frames
 /// are answered with `{"type":"pong"}` on the way.
+///
+/// ADR-167: the three ways this can give up (deadline expiry, stream
+/// ended early, unparseable frame) used to collapse into one `None`,
+/// which hid the failure mode in CI — each path now logs its reason
+/// and elapsed time. Budget and assertions unchanged.
 async fn wait_event(client: &mut WsClient, event_type: &str, timeout: Duration) -> Option<Value> {
-    let deadline = tokio::time::Instant::now() + timeout;
+    let started = tokio::time::Instant::now();
+    let wanted = format!("event_type {event_type:?}");
+    let deadline = started + timeout;
     loop {
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         if left.is_zero() {
+            log_wait_gave_up("wait_event", &wanted, "TIMEOUT", started, timeout);
             return None;
         }
-        let text = client.next_text(left).await?;
-        let value: Value = serde_json::from_str(&text).ok()?;
+        let text = match client.next_text_outcome(left).await {
+            TextOutcome::Text(t) => t,
+            TextOutcome::Closed(code) => {
+                log_wait_gave_up(
+                    "wait_event",
+                    &wanted,
+                    &format!("STREAM ENDED (close code {code:?})"),
+                    started,
+                    timeout,
+                );
+                return None;
+            }
+            TextOutcome::Timeout => {
+                log_wait_gave_up("wait_event", &wanted, "TIMEOUT", started, timeout);
+                return None;
+            }
+        };
+        let value: Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                log_wait_gave_up(
+                    "wait_event",
+                    &wanted,
+                    &format!("UNPARSEABLE frame: {e}; frame (first 200 chars): {text:.200}"),
+                    started,
+                    timeout,
+                );
+                return None;
+            }
+        };
         if value["type"] == "ping" {
             client.send_text(r#"{"type":"pong"}"#).await;
             continue;
         }
         if value["type"] == "event" && value["event_type"] == event_type {
+            return Some(value);
+        }
+    }
+}
+
+/// Read text messages until one parses as JSON with `"type"` equal to
+/// `frame_type`, skipping any other frame — live `{"type":"event"}`
+/// frames the outbox poller broadcasts between the client's message
+/// and the server's ack, and server `{"type":"ping"}` frames (answered
+/// with `{"type":"pong"}`). The poller ticks every second and can land
+/// mid-handshake, so a bare "next frame" read races with it (ADR-165).
+///
+/// Same ADR-167 failure-path logging as `wait_event`.
+async fn wait_frame_type(
+    client: &mut WsClient,
+    frame_type: &str,
+    timeout: Duration,
+) -> Option<Value> {
+    let started = tokio::time::Instant::now();
+    let wanted = format!("frame_type {frame_type:?}");
+    let deadline = started + timeout;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            log_wait_gave_up("wait_frame_type", &wanted, "TIMEOUT", started, timeout);
+            return None;
+        }
+        let text = match client.next_text_outcome(left).await {
+            TextOutcome::Text(t) => t,
+            TextOutcome::Closed(code) => {
+                log_wait_gave_up(
+                    "wait_frame_type",
+                    &wanted,
+                    &format!("STREAM ENDED (close code {code:?})"),
+                    started,
+                    timeout,
+                );
+                return None;
+            }
+            TextOutcome::Timeout => {
+                log_wait_gave_up("wait_frame_type", &wanted, "TIMEOUT", started, timeout);
+                return None;
+            }
+        };
+        let value: Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                log_wait_gave_up(
+                    "wait_frame_type",
+                    &wanted,
+                    &format!("UNPARSEABLE frame: {e}; frame (first 200 chars): {text:.200}"),
+                    started,
+                    timeout,
+                );
+                return None;
+            }
+        };
+        if value["type"] == "ping" {
+            client.send_text(r#"{"type":"pong"}"#).await;
+            continue;
+        }
+        if value["type"] == frame_type {
+            return Some(value);
+        }
+    }
+}
+
+/// Read text messages until one parses as JSON with `"type": "event"`
+/// and the expected `event_id`, skipping any other frame (same
+/// interleaved-live-frame race as `wait_frame_type`: a live broadcast
+/// of the same event can arrive before the server's replay of it, and
+/// a replayed duplicate can arrive after the live one — either order
+/// satisfies the wait, and the next wait skips the duplicate).
+///
+/// Same ADR-167 failure-path logging as `wait_event`.
+async fn wait_event_id(client: &mut WsClient, event_id: &str, timeout: Duration) -> Option<Value> {
+    let started = tokio::time::Instant::now();
+    let wanted = format!("event_id {event_id:?}");
+    let deadline = started + timeout;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            log_wait_gave_up("wait_event_id", &wanted, "TIMEOUT", started, timeout);
+            return None;
+        }
+        let text = match client.next_text_outcome(left).await {
+            TextOutcome::Text(t) => t,
+            TextOutcome::Closed(code) => {
+                log_wait_gave_up(
+                    "wait_event_id",
+                    &wanted,
+                    &format!("STREAM ENDED (close code {code:?})"),
+                    started,
+                    timeout,
+                );
+                return None;
+            }
+            TextOutcome::Timeout => {
+                log_wait_gave_up("wait_event_id", &wanted, "TIMEOUT", started, timeout);
+                return None;
+            }
+        };
+        let value: Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                log_wait_gave_up(
+                    "wait_event_id",
+                    &wanted,
+                    &format!("UNPARSEABLE frame: {e}; frame (first 200 chars): {text:.200}"),
+                    started,
+                    timeout,
+                );
+                return None;
+            }
+        };
+        if value["type"] == "ping" {
+            client.send_text(r#"{"type":"pong"}"#).await;
+            continue;
+        }
+        if value["type"] == "event" && value["event_id"] == event_id {
             return Some(value);
         }
     }
@@ -833,42 +1066,38 @@ async fn ws_resume_replay_from_query_and_live_message() {
     // Handshake replay: ?last_event_id=<first> + channels=probe.*
     // replays two and three, in order, without repeating one. The
     // first frame is the {"type":"subscribed"} ack for the handshake
-    // channel, then the replayed events follow.
+    // channel, then the replayed events follow. The outbox poller can
+    // broadcast a live copy of one of the probe events before the ack
+    // or between the replayed frames (ADR-165), so each read waits for
+    // the frame it expects and skips the interleaved ones instead of
+    // assuming the next frame is the wanted one.
     let ticket = ws_ticket(&env, &token).await;
     let addr = serve(env.router()).await;
     let target = format!("/ws/events?ticket={ticket}&channels=probe.*&last_event_id={first}");
     let mut client = WsClient::connect(addr, &target, &[]).await;
-    let ack = client
-        .next_text(Duration::from_secs(5))
+    let ack = wait_frame_type(&mut client, "subscribed", Duration::from_secs(5))
         .await
         .expect("subscribed ack");
-    assert_eq!(
-        serde_json::from_str::<Value>(&ack).unwrap()["type"],
-        json!("subscribed")
-    );
-    let replayed = client
-        .next_text(Duration::from_secs(5))
+    assert_eq!(ack["type"], json!("subscribed"));
+    let value = wait_event_id(&mut client, &second.to_string(), Duration::from_secs(5))
         .await
         .expect("replay 1");
-    let value: Value = serde_json::from_str(&replayed).unwrap();
     assert_eq!(value["type"], json!("event"));
     assert_eq!(value["event_id"], json!(second.to_string()));
-    let replayed = client
-        .next_text(Duration::from_secs(5))
+    let value = wait_event_id(&mut client, &third.to_string(), Duration::from_secs(5))
         .await
         .expect("replay 2");
-    let value: Value = serde_json::from_str(&replayed).unwrap();
     assert_eq!(value["event_id"], json!(third.to_string()));
     // Live resume: replays nothing new (cursor is already at the
-    // newest event) and answers {"type":"resumed"}.
+    // newest event) and answers {"type":"resumed"}. A live event frame
+    // can arrive before the ack (ADR-165), so wait for the resumed
+    // frame instead of reading a single next frame.
     client
         .send_text(&format!(r#"{{"type":"resume","last_event_id":"{third}"}}"#))
         .await;
-    let resumed = client
-        .next_text(Duration::from_secs(5))
+    let value = wait_frame_type(&mut client, "resumed", Duration::from_secs(5))
         .await
         .expect("resumed");
-    let value: Value = serde_json::from_str(&resumed).unwrap();
     assert_eq!(value["type"], json!("resumed"));
     assert_eq!(value["last_event_id"], json!(third.to_string()));
 }
@@ -890,6 +1119,8 @@ async fn wave8_pg_smoke() {
     let Some(url) = std::env::var("WAVE2_PG_URL").ok() else {
         return;
     };
+    // Serialize with the other pg smoke in this file (shared DB).
+    let _pg_guard = PG_SMOKE_LOCK.lock().await;
     let db = Db::connect(&url).await.expect("pg connect");
     // The smokes share one DB: drop every TEST_SCHEMA table first, like
     // the wave2/wave8/wave8_projects smokes — plain CREATE TABLE in
@@ -952,8 +1183,123 @@ async fn wave8_pg_smoke() {
         json!("subscribed")
     );
     let event_id = insert_event(&env, "user.login", "user", &uid, Utc::now()).await;
-    let got = wait_event(&mut client, "user.login", Duration::from_secs(5))
-        .await
-        .expect("live event on pg");
+    // Live-event wait budget is 15 s, not 5 s (ADR-166): the event
+    // arrives ~45 ms after the insert locally, but the poller tick +
+    // PG query + broadcast can stall past 5 s on a loaded CI runner
+    // (three CI failures of exactly this wait), so the budget is 3x
+    // the failing one with ~330x headroom over the measured latency.
+    // ADR-167: the wait still failed in CI twice more at 15 s, and
+    // `wait_event` now logs which failure path fired and after how
+    // long — the elapsed time here is the second measurement, so the
+    // next CI log shows the wait's own duration even if the helper
+    // line is missed.
+    let wait_started = tokio::time::Instant::now();
+    let got = wait_event(&mut client, "user.login", Duration::from_secs(15)).await;
+    eprintln!(
+        "[wave8_pg_smoke] live-event wait finished after {:?}: {}",
+        wait_started.elapsed(),
+        if got.is_some() {
+            "matched"
+        } else {
+            "no event (see the [wait_event] line above)"
+        }
+    );
+    let got = got.expect("live event on pg");
     assert_eq!(got["event_id"], json!(event_id.to_string()));
+}
+
+/// ADR-168 regression: the poller's watermark is the spawn instant,
+/// not the newest row at first poll. The spawned task's first poll
+/// can run seconds late — on this single-thread test runtime a
+/// synchronous block (e.g. the argon2 register/login hashes) delays
+/// it past inserts — so an event inserted while the task is still
+/// unpolled must still be delivered. Pre-fix this test failed
+/// deterministically: the first fetch captured the event as the
+/// watermark and it was never delivered (proven by the CI log on
+/// HEAD bf94882: first run 3.54 s after spawn, 286 ticks
+/// fetched=4 sent=0 skipped=4). The insert happens on a second
+/// thread while this thread is blocked, exactly like the failing
+/// CI timing; a direct hub receiver (no WS handshake, no heartbeat)
+/// is the probe.
+#[tokio::test]
+async fn wave8_pg_smoke_poller_spawn_cutoff() {
+    let Some(url) = std::env::var("WAVE2_PG_URL").ok() else {
+        return;
+    };
+    // Serialize with the other pg smoke in this file (shared DB).
+    let _pg_guard = PG_SMOKE_LOCK.lock().await;
+    let db = Db::connect(&url).await.expect("pg connect");
+    // Fresh schema, exactly like wave8_pg_smoke.
+    let mut tables = Vec::new();
+    for part in TEST_SCHEMA.split("CREATE TABLE") {
+        let name: String = part
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            tables.push(name);
+        }
+    }
+    for table in tables {
+        db.execute(&format!("DROP TABLE IF EXISTS {table} CASCADE"), &[])
+            .await
+            .unwrap();
+    }
+    init_test_schema(&db).await.expect("pg test schema");
+    let state = AppState::with_db(test_config(), Some(db.clone()));
+    let env = Env { state, db };
+    // Spawns the poller; the receiver is subscribed before the block
+    // so no broadcast is missed.
+    let _router = env.router();
+    let mut rx = env.state.ws_hub.sender.subscribe();
+    // Insert the event from another thread while this thread is
+    // blocked: the poller task cannot run its first poll until the
+    // block ends, so the insert lands strictly after spawn but
+    // before the first poll. The insert uses a fresh pool on the
+    // helper thread's own runtime: the main pool belongs to the
+    // blocked test runtime and cannot hand out a connection from
+    // here (a shared-pool acquire waits out sqlx's 30 s default
+    // and fails).
+    let insert_url = url.clone();
+    let inserter = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("inserter runtime");
+        rt.block_on(async {
+            let db2 = Db::connect(&insert_url).await.expect("pg connect");
+            let event_id = Uuid::new_v4();
+            db2
+                .execute(
+                    "INSERT INTO domain_events (event_id, idempotency_key, aggregate_type, aggregate_id, \
+                     event_type, payload, schema_version, source_client, created_at, retry_count) \
+                     VALUES (?, NULL, ?, ?, ?, ?, 1, 'api', ?, 0)",
+                    &[
+                        event_id.into_arg(),
+                        "probe".into_arg(),
+                        "p".into_arg(),
+                        "probe.late".into_arg(),
+                        json!({"probe": true}).into_arg(),
+                        Utc::now().into_arg(),
+                    ],
+                )
+                .await
+                .expect("insert late event");
+            event_id
+        })
+    });
+    // Block the single-thread runtime for 2 s: the poller task's
+    // first poll cannot run while this thread sleeps.
+    std::thread::sleep(Duration::from_secs(2));
+    let event_id = inserter.join().expect("inserter thread");
+    // The poller ticks every 50 ms in this config; the late event
+    // must arrive despite the first poll running after the insert.
+    let got = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("late event delivered within 5 s");
+    let got = got.expect("broadcast recv");
+    assert_eq!(got.event_type, "probe.late");
+    assert_eq!(got.event_id, event_id);
 }

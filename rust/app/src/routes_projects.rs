@@ -49,7 +49,7 @@ use crate::{
         as_bool, opt_bool_loose, opt_date, opt_datetime, opt_localized, opt_str_raw_max, opt_uuid,
         parse_body, parse_datetime_str, parse_path_uuid, parse_query, query_int, req_localized,
     },
-    AppState,
+    AppState, Config,
 };
 
 /// Cursor page cap (Python `Query(le=50)`).
@@ -288,12 +288,17 @@ fn channel_configured(key: &str) -> bool {
 /// dispatch. Returns whether at least one channel delivered. Missing
 /// or inactive users deliver nothing.
 ///
-/// Email/SMS honesty note (ADR-143): the Rust mailer is still the
-/// Wave 2 stub (`mail.rs`, ADR-015) — `send_email` / `send_sms` log
-/// and return `()`, so a channel counts as delivered when the user
-/// has an address/phone, exactly like the admin broadcast does; a
-/// missing address/phone is an honest non-delivery.
-async fn notify_task_event(db: &Db, assignee_id: Uuid, kind: &str, task: &Task) -> ApiResult<bool> {
+/// Email/SMS honesty note (ADR-158): delivery is real now — a
+/// channel counts as delivered only when the send returns `Ok`; a
+/// failed send (unconfigured or undeliverable) is an honest
+/// non-delivery, and a missing address/phone likewise.
+async fn notify_task_event(
+    db: &Db,
+    config: &Config,
+    assignee_id: Uuid,
+    kind: &str,
+    task: &Task,
+) -> ApiResult<bool> {
     let Some(user) = load_user(db, assignee_id).await? else {
         return Ok(false);
     };
@@ -372,15 +377,20 @@ async fn notify_task_event(db: &Db, assignee_id: Uuid, kind: &str, task: &Task) 
             }
             "email" => {
                 if let Some(email) = &user.email {
-                    send_email(email, &title_fa, &body_fa, "").await;
-                    delivered.push(ch.clone());
+                    if send_email(config, email, &title_fa, &body_fa, "")
+                        .await
+                        .is_ok()
+                    {
+                        delivered.push(ch.clone());
+                    }
                 }
             }
             "sms" => {
                 if let Some(phone) = &user.phone {
                     let text: String = format!("{title_fa}\n{body_fa}").chars().take(500).collect();
-                    send_sms(phone, &text).await;
-                    delivered.push(ch.clone());
+                    if send_sms(config, phone, &text).await.is_ok() {
+                        delivered.push(ch.clone());
+                    }
                 }
             }
             // "push" is never configured, so this arm is unreachable
@@ -968,8 +978,17 @@ pub async fn create_task(
     )
     .await?;
     if let Some(assignee) = assignee_id {
-        assign_task_side_effects(db, &ctx, id, assignee, None, ip.as_deref(), ua.as_deref())
-            .await?;
+        assign_task_side_effects(
+            db,
+            &state.config,
+            &ctx,
+            id,
+            assignee,
+            None,
+            ip.as_deref(),
+            ua.as_deref(),
+        )
+        .await?;
     }
     let t = get_task_row(db, id).await?;
     Ok((StatusCode::CREATED, Json(t.out())))
@@ -979,8 +998,13 @@ pub async fn create_task(
 /// in PATCH): audit `projects.task.assign` + `task.assigned` event +
 /// the notification helper. `old_values` is `None` on create (Python
 /// passes no `old_values` there) and `{"assignee_id": ...}` on PATCH.
+/// Eight arguments, allowed like `finalize_success`: db, config,
+/// actor, task, assignee, old values and the audit ip/ua are all
+/// genuinely needed here.
+#[allow(clippy::too_many_arguments)]
 async fn assign_task_side_effects(
     db: &Db,
+    config: &Config,
     ctx: &AuthCtx,
     task_id: Uuid,
     new_assignee: Uuid,
@@ -1014,7 +1038,7 @@ async fn assign_task_side_effects(
     )
     .await?;
     let task = get_task_row(db, task_id).await?;
-    notify_task_event(db, new_assignee, "assigned", &task).await?;
+    notify_task_event(db, config, new_assignee, "assigned", &task).await?;
     Ok(())
 }
 
@@ -1126,6 +1150,7 @@ pub async fn update_task(
     if let Some(new) = new_assignee.filter(|n| Some(*n) != old_assignee) {
         assign_task_side_effects(
             db,
+            &state.config,
             &ctx,
             id,
             new,
@@ -1486,7 +1511,11 @@ pub async fn delete_staff(
 /// like every other module — the observable end state is identical,
 /// but a mid-cycle crash would leave a partial stamp instead of
 /// rolling back.
-pub async fn run_task_due_soon_cycle(db: &Db, now: DateTime<Utc>) -> ApiResult<(i64, i64)> {
+pub async fn run_task_due_soon_cycle(
+    db: &Db,
+    config: &Config,
+    now: DateTime<Utc>,
+) -> ApiResult<(i64, i64)> {
     let window_end = now + chrono::Duration::hours(24);
     let renotify_before = now - chrono::Duration::hours(20);
     let rows = db
@@ -1512,7 +1541,7 @@ pub async fn run_task_due_soon_cycle(db: &Db, now: DateTime<Utc>) -> ApiResult<(
         )
         .await?;
         if let Some(assignee_id) = t.assignee_id {
-            let delivered = notify_task_event(db, assignee_id, "due_soon", &t).await?;
+            let delivered = notify_task_event(db, config, assignee_id, "due_soon", &t).await?;
             if delivered {
                 notified += 1;
             }
@@ -1543,6 +1572,6 @@ pub async fn due_soon_cycle(
 ) -> ApiResult<Json<Value>> {
     let _ctx = admin_ctx(&state, &headers, "/api/v1/admin/projects/due-soon-cycle").await?;
     let db = state.db_or_500()?;
-    let (scanned, notified) = run_task_due_soon_cycle(db, utc_now()).await?;
+    let (scanned, notified) = run_task_due_soon_cycle(db, &state.config, utc_now()).await?;
     Ok(Json(json!({ "scanned": scanned, "notified": notified })))
 }

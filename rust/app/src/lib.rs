@@ -54,7 +54,8 @@ mod hijri;
 mod jwt;
 mod library_visibility;
 mod localized;
-mod mail;
+pub mod mail;
+pub mod mail_templates;
 mod quran_data;
 mod quran_providers;
 mod ratelimit;
@@ -85,10 +86,12 @@ mod routes_videos;
 mod routes_voice;
 mod routes_widgets;
 mod settings;
-mod storage;
+pub mod sigv4;
+pub mod storage;
 mod subtitles;
 mod sync;
 mod totp;
+mod upload_scan;
 mod validate;
 mod video_links;
 mod voice_intents;
@@ -127,10 +130,18 @@ pub use storage::presigned_url;
 /// `STORAGE_SIGNING_SECRET` (+ `_PREVIOUS`), `APP_BASE_URL`,
 /// `CAPTCHA_ENABLED` (true), `TURNSTILE_SITE_KEY` /
 /// `TURNSTILE_SECRET_KEY`, `TRUSTED_PROXIES`, `STORAGE_PROVIDER`
-/// (`local`), `STORAGE_LOCAL_DIR` (`./storage`),
-/// `CLAMAV_ALLOW_INSECURE_DEV_BYPASS` (false), and the realtime
-/// settings `WS_HEARTBEAT_INTERVAL` (25) / `WS_HEARTBEAT_TIMEOUT` (60)
-/// / `DISPATCHER_POLL_INTERVAL` (1.0).
+/// (`local`), `STORAGE_LOCAL_DIR` (`./storage`), the S3 settings
+/// `S3_ENDPOINT` / `S3_ENDPOINT_PUBLIC` / `S3_ACCESS_KEY` /
+/// `S3_SECRET_KEY` / `S3_BUCKET` / `S3_REGION` (ADR-162), the mail
+/// settings `RESEND_API_KEY` / `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` /
+/// `SMTP_PASSWORD` / `SMTP_FROM` and the SMS settings `SMS_API_KEY` /
+/// `SMS_SENDER` / `SMS_PROVIDER` (ADR-158), `SIDECAR_TIMEOUT_SECS` (0,
+/// ADR-159), and the realtime settings `WS_HEARTBEAT_INTERVAL` (25) /
+/// `WS_HEARTBEAT_TIMEOUT` (60) / `DISPATCHER_POLL_INTERVAL` (1.0).
+///
+/// `CLAMAV_ALLOW_INSECURE_DEV_BYPASS` was removed in Wave 9 PR-3
+/// (ADR-164): the last ClamAV gate is gone, so the flag has no
+/// consumer.
 ///
 /// `ORIGIN_URL` was removed at the Wave 8 lift (ADR-133): there is no
 /// origin to proxy to any more.
@@ -159,7 +170,33 @@ pub struct Config {
     pub trusted_proxies: Vec<String>,
     pub storage_provider: String,
     pub storage_dir: String,
-    pub clamav_allow_insecure_dev_bypass: bool,
+    /// S3-compatible storage (ADR-162): endpoint, public endpoint for
+    /// browser presigned URLs, credentials, bucket, region. Empty
+    /// strings mean "not configured" — production refuses to boot
+    /// without them when `storage_provider` is `s3` (see
+    /// `storage::validate_storage_config`).
+    pub s3_endpoint: String,
+    pub s3_endpoint_public: String,
+    pub s3_access_key: String,
+    pub s3_secret_key: String,
+    pub s3_bucket: String,
+    pub s3_region: String,
+    /// Real mail/SMS (ADR-158): Resend key (preferred) or SMTP host
+    /// for email; Kavenegar key/sender for SMS. All `Option`/empty
+    /// when unset — the mailer then fails honestly, never fakes a
+    /// send.
+    pub resend_api_key: Option<String>,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_user: String,
+    pub smtp_password: String,
+    pub smtp_from: String,
+    pub sms_api_key: Option<String>,
+    pub sms_sender: String,
+    pub sms_provider: String,
+    /// Sidecar forwarder (ADR-159): overrides every route's timeout
+    /// at once when > 0; 0 (default) means the per-route values.
+    pub sidecar_timeout_secs: u64,
 }
 
 fn env_str(name: &str, default: &str) -> String {
@@ -206,7 +243,22 @@ impl Default for Config {
             trusted_proxies: Vec::new(),
             storage_provider: "local".to_string(),
             storage_dir: "./storage".to_string(),
-            clamav_allow_insecure_dev_bypass: false,
+            s3_endpoint: "http://localhost:9000".to_string(),
+            s3_endpoint_public: String::new(),
+            s3_access_key: "minioadmin".to_string(),
+            s3_secret_key: "minioadmin".to_string(),
+            s3_bucket: "maturidi-media".to_string(),
+            s3_region: "us-east-1".to_string(),
+            resend_api_key: None,
+            smtp_host: String::new(),
+            smtp_port: 587,
+            smtp_user: String::new(),
+            smtp_password: String::new(),
+            smtp_from: "noreply@example.com".to_string(),
+            sms_api_key: None,
+            sms_sender: String::new(),
+            sms_provider: "kavenegar".to_string(),
+            sidecar_timeout_secs: 0,
         }
     }
 }
@@ -283,7 +335,34 @@ impl Config {
             trusted_proxies,
             storage_provider: env_str("STORAGE_PROVIDER", "local"),
             storage_dir: env_str("STORAGE_LOCAL_DIR", "./storage"),
-            clamav_allow_insecure_dev_bypass: env_bool("CLAMAV_ALLOW_INSECURE_DEV_BYPASS", false),
+            s3_endpoint: env_str("S3_ENDPOINT", "http://localhost:9000"),
+            s3_endpoint_public: std::env::var("S3_ENDPOINT_PUBLIC").ok().unwrap_or_default(),
+            s3_access_key: env_str("S3_ACCESS_KEY", "minioadmin"),
+            s3_secret_key: env_str("S3_SECRET_KEY", "minioadmin"),
+            s3_bucket: env_str("S3_BUCKET", "maturidi-media"),
+            s3_region: env_str("S3_REGION", "us-east-1"),
+            resend_api_key: std::env::var("RESEND_API_KEY")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
+            smtp_host: std::env::var("SMTP_HOST").ok().unwrap_or_default(),
+            smtp_port: std::env::var("SMTP_PORT")
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(587),
+            smtp_user: std::env::var("SMTP_USER").ok().unwrap_or_default(),
+            smtp_password: std::env::var("SMTP_PASSWORD").ok().unwrap_or_default(),
+            smtp_from: env_str("SMTP_FROM", "noreply@example.com"),
+            sms_api_key: std::env::var("SMS_API_KEY")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
+            sms_sender: std::env::var("SMS_SENDER").ok().unwrap_or_default(),
+            sms_provider: env_str("SMS_PROVIDER", "kavenegar"),
+            sidecar_timeout_secs: std::env::var("SIDECAR_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0),
         }
     }
 }
@@ -1081,13 +1160,21 @@ pub fn build_router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/admin/library/items",
-                get(routes_library::admin_list).post(routes_library::admin_create),
+                // The Multipart extractor defaults to a 2 MB body
+                // limit; the handler caps library files at 512 MB
+                // (ADR-161), so the extractor limit is disabled for
+                // this route only — the GET on the same path has no
+                // body and is unaffected.
+                get(routes_library::admin_list)
+                    .post(routes_library::admin_create)
+                    .layer(DefaultBodyLimit::disable()),
             )
             .route(
                 "/api/v1/admin/library/items/{item_id}",
                 get(routes_library::admin_get)
                     .put(routes_library::admin_update)
-                    .delete(routes_library::admin_delete),
+                    .delete(routes_library::admin_delete)
+                    .layer(DefaultBodyLimit::disable()),
             )
             .route(
                 "/api/v1/admin/library/items/{item_id}/transition",
@@ -1569,7 +1656,10 @@ pub fn build_router(state: AppState) -> Router {
                     .patch(routes_users::update_me)
                     .delete(routes_users::delete_me),
             )
-            .route("/api/v1/users/me/avatar", post(routes_users::upload_avatar))
+            .route(
+                "/api/v1/users/me/avatar",
+                post(routes_users::upload_avatar).layer(DefaultBodyLimit::disable()),
+            )
             .route(
                 "/api/v1/users/me/sessions",
                 get(routes_users::list_sessions),
@@ -1674,7 +1764,10 @@ pub fn build_router(state: AppState) -> Router {
                 "/api/v1/admin/events/dead-letter/{event_id}/retry",
                 post(routes_admin::retry_dead_letter),
             )
-            .route("/api/v1/admin/fonts", post(routes_admin::upload_font))
+            .route(
+                "/api/v1/admin/fonts",
+                post(routes_admin::upload_font).layer(DefaultBodyLimit::disable()),
+            )
             .route(
                 "/api/v1/admin/fonts/{locale}",
                 delete(routes_admin::delete_font),
@@ -1853,32 +1946,43 @@ pub fn build_router(state: AppState) -> Router {
         .route("/openapi.json", get(routes_lift::openapi_handler))
         .route("/static/{*path}", get(routes_lift::static_file))
         .route("/ws/events", get(routes_lift::ws_events))
-        .route("/api/v1/fatwa/ask", post(routes_lift::sidecar_fatwa_ask))
+        // The 8 sidecar routes (ADR-159): the router's 2 MB default
+        // body limit is disabled so the forwarder's own caps govern
+        // (fatwa 1 MB → 413 `request_too_large`, audio 32 MB →
+        // 413 `hifz_audio_too_large` / 422 `audio_too_large`) and the
+        // client gets the proper envelope code instead of a bare 413.
+        .route(
+            "/api/v1/fatwa/ask",
+            post(routes_lift::sidecar_fatwa_ask).layer(DefaultBodyLimit::disable()),
+        )
         .route(
             "/api/v1/finance/receipts/{donation_id}",
-            get(routes_lift::sidecar_receipt_pdf),
+            get(routes_lift::sidecar_receipt_pdf).layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/api/v1/quran/hifz/attempts/{attempt_id}/grade",
-            post(routes_lift::sidecar_hifz_grade),
+            post(routes_lift::sidecar_hifz_grade).layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/api/v1/quran/hifz/attempts/{attempt_id}/grade-word",
-            post(routes_lift::sidecar_hifz_grade_word),
+            post(routes_lift::sidecar_hifz_grade_word).layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/api/v1/quran/hifz/tests/{test_id}/questions/{question_id}/answer",
-            post(routes_lift::sidecar_hifz_test_answer),
+            post(routes_lift::sidecar_hifz_test_answer).layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/api/v1/quran/hifz/voice-search",
-            post(routes_lift::sidecar_hifz_voice_search),
+            post(routes_lift::sidecar_hifz_voice_search).layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/api/v1/voice/transcribe",
-            post(routes_lift::sidecar_voice_transcribe),
+            post(routes_lift::sidecar_voice_transcribe).layer(DefaultBodyLimit::disable()),
         )
-        .route("/api/v1/voice/ask", post(routes_lift::sidecar_voice_ask));
+        .route(
+            "/api/v1/voice/ask",
+            post(routes_lift::sidecar_voice_ask).layer(DefaultBodyLimit::disable()),
+        );
 
     // The OpenAPI spec is generated from the router just built (see
     // routes_lift::openapi_spec); the realtime poller fans the outbox

@@ -102,7 +102,7 @@ Wave 9 PR-3 work, not porting decisions).
 - Equivalence bar for floats, error text, validation errors: status + error
   shape pinned, exact Pydantic wording not reproduced (ADR-006).
 
-## Port progress — Waves 1–8 (complete) + Wave 9 (PR-2 in progress)
+## Port progress — Waves 1–8 (complete) + Wave 9 (PR-3 in progress)
 
 - Wave 1 (done, verified green locally): Axum front door, `GET /health`,
   `GET /ready`, proxy fallback to `ORIGIN_URL`. See ADR-007 / ADR-013.
@@ -404,7 +404,7 @@ Wave 9 PR-3 work, not porting decisions).
   - Route accounting: Python has 468 endpoints (467 HTTP decorators + the hifz WS stream) plus `/docs` (dev-only), `/openapi.json` (auto) and the `/static` mount. Rust serves **471** route+method combos: **463 native** (440 pre-lift + 5 lift-new + 18 projects) + **8 sidecar-contract**. The 6 generic CMS `{resource}` routes cover all 36 concrete Python CMS routes, and the due-soon-cycle endpoint is a deliberate Wave 8 addition with no Python HTTP equivalent. The pre-lift native count is **440**, re-verified two ways (source parse and live-router spec); the 439 figure was a miscount (a `//` comment hid the video-subtitles route from a naive parse) and is refuted in ADR-147.
   - Replay (ADR-138): `rust/app/tests/wave8.rs` replays all 127 app-cases from waves 2–7 against the pure-Rust build (fresh sqlite DB per case, auth provisioned by label, mechanical placeholder substitution, per-file seeding hooks) — final replay 2026-11-22: **122 passed, 0 failed, 5 skipped** (wave2 11/0/3, wave3 14/0/0, wave4 15/0/0, wave5 14/0/0, wave6 18/0/2, wave7 50/0/0); the 5 skipped are documentation-only by design (wave2/08, 09, 10 need tokens from a prior step; wave6/lib-05 needs a minted download signature; wave6/lib-06 has a prose multipart body). The first run had 3 failures, all case-file drift verified against Python and corrected to the Python behaviour (wave2/01 nested `places.globe` + no vapid key; lib-04 no `total`; syn-08 bare-array response); PG smoke green.
   - Cutover: `scripts/cutover.sh` (read-only preflight: live-project guard, env, Postgres, Redis, schema, bundled data, sidecar UP/DOWN table; exit 0 GO / 2 DEGRADED / 1 NO-GO; `--dry-run`) + `scripts/cutover-README.md` (Persian runbook: deploy order, env-var table, smoke checklist, rollback). Script only — never executed against a live server. `Dockerfile` + `railway.toml` were added in the Wave 8 push and are documented as-is in Wave 9 PR-1 (`scripts/cutover-README.md` §3) — **neither has ever been built; the first Railway build is their first verification**. Open items: whether Railway Postgres provides `vector`/`pg_trgm`; the mail/SMS delivery path on the Rust deployment (mailer is a stub); widget CORS wildcard must come from the deploy layer.
-  - Tests: `rust/app/tests/wave8_projects.rs` (18: 17 sqlite + `wave8_projects_pg_smoke`), `rust/app/tests/wave8_lift.rs` (16: 15 sqlite + `wave8_pg_smoke`), `rust/app/tests/wave8.rs` (2: `replay_all_app_cases` — 122 passed / 0 failed / 5 skipped over the 127 wave2–wave7 cases — + `wave8_pg_smoke`), `rust/app/tests/front_door.rs` (11, rewritten: proxy tests deleted, 404/405/metrics/health/openapi/sidecar-503 added). Cases: `rust/app-cases/wave8/` (`proj-01`–`proj-13`, `lift-01`–`lift-12` + README).
+  - Tests: `rust/app/tests/wave8_projects.rs` (18: 17 sqlite + `wave8_projects_pg_smoke`), `rust/app/tests/wave8_lift.rs` (17: 15 sqlite + 2 pg: `wave8_pg_smoke` + `wave8_pg_smoke_poller_spawn_cutoff`, ADR-168), `rust/app/tests/wave8.rs` (2: `replay_all_app_cases` — 122 passed / 0 failed / 5 skipped over the 127 wave2–wave7 cases — + `wave8_pg_smoke`), `rust/app/tests/front_door.rs` (11, rewritten: proxy tests deleted, 404/405/metrics/health/openapi/sidecar-503 added). Cases: `rust/app-cases/wave8/` (`proj-01`–`proj-13`, `lift-01`–`lift-12` + README).
   - Tests: `rust/app/tests/wave4.rs` (24 tests, sqlite in-memory;
     `wave4_pg_smoke` replays the critical path on local Postgres when
     `WAVE2_PG_URL` is set). Cases: `rust/app-cases/wave4/` (15 cases).
@@ -488,7 +488,7 @@ Wave 9 PR-3 work, not porting decisions).
   - Not yet ported in Wave 2 (stubs / Wave 7): real mail/SMS delivery,
     ClamAV scan, S3 storage (see ADR-015).
 
-## Wave 9 — Production Readiness (PR-2 in progress)
+## Wave 9 — Production Readiness (PR-3 in progress)
 
 Goal: prepare the Rust backend for a real build, test and deployment on
 an **independent** Railway project. Standing rules (user directive
@@ -547,15 +547,19 @@ Full corrections in ADR-148.
   and on local Postgres when `WAVE2_PG_URL` is set); cases under
   `rust/app-cases/wave9/`.
 
-### PR-2 CI and Build Verification (in progress)
+### PR-2 CI and Build Verification (merged as PR #2, 2026-11-23)
 
 Four CI jobs, all merge gates — a failing run blocks the PR
-(ADR-149/150/151/153/154). Branch protection is the enforcement: the repo must
-require the checks `rust`, `redis`, `docker` and `alembic` on `main` (Settings →
-Branches → branch protection rule for `main` → "Require status checks
-to pass"). **That setting is a manual follow-up — it is NOT done by
-this PR and must not be claimed as done.** Until it is set, the gates
-exist but nothing enforces them.
+(ADR-149/150/151/153/154). **Merged as `2a204d0`** (merge commit,
+parents `f10b5cc` + `724ef81`, branch `wave9/pr-2-ci-build-verification`
+retained); CI green on the branch (#91 push + #92 PR, all four jobs)
+and on main (#93, all four jobs green, ~24 min). Local verification:
+339 tests green, release build green, `alembic-check.sh` PASS.
+**Branch protection is DONE (2026-11-23 ~10:15):** the rule on `main`
+requires the checks `rust`, `redis`, `docker`, `alembic`, does not
+allow bypassing (applies to admins too), no required approvals;
+GitHub sudo-mode was confirmed by the user entering the emailed
+one-time code himself in the live browser.
 
 | Gate (job) | What runs | Service images | What it proves that local runs cannot |
 |---|---|---|---|
@@ -578,12 +582,13 @@ exist but nothing enforces them.
 - **Docker (ADR-150):** `docker/build-push-action@v6`, `push: false`,
   `load: true`, tag `maturidi-api-rs:ci`. SBOM is SPDX JSON from syft
   on the built image (OS packages + binary), uploaded as artifact
-  `sbom`. `cargo audit` fails the run on any RUSTSEC advisory except
-  the two named in ADR-152 (`--ignore RUSTSEC-2023-0071` rsa and
-  `--ignore RUSTSEC-2026-0459` libsqlite3-sys — no patch upgrade exists
-  inside sqlx 0.8; the sqlx 0.9 upgrade is a PR-3 open item). The first
-  audit also surfaced chrono RUSTSEC-2026-0543 as a warning only (no
-  fixed upgrade; recorded in ADR-152, no ignore needed).
+  `sbom`. `cargo audit` fails the run on any RUSTSEC advisory. The
+  two named exceptions from ADR-152 (`--ignore RUSTSEC-2023-0071`
+  rsa and `--ignore RUSTSEC-2026-0459` libsqlite3-sys) were **closed
+  by PR-3 (ADR-157)**: sqlx 0.9.1 + libsqlite3-sys 0.40.0, audit
+  clean with no ignores. The first audit also surfaced chrono
+  RUSTSEC-2026-0543 as a warning only (no fixed upgrade; recorded
+  in ADR-152, no ignore needed).
 - **Alembic (ADR-151, fixed by ADR-155):** the original repo is checked out at main `9154d17` (read-only) and the locked base is recreated by merging PR #193 + #194 — the locked-base merge commit `5d1cb02` was never pushed and cannot be checked out by SHA. `scripts/alembic-check.sh` proves the checkout is the locked base by TREE hash (`73422149…`, ADR-155), then asserts single head `f2a3b4c5d6e7`, runs `alembic upgrade head`,
   verifies version row + `vector`/`pg_trgm` + 120 tables (119 app +
   `alembic_version`), then serves the Rust release binary's /ready
@@ -600,7 +605,148 @@ exist but nothing enforces them.
   `rust/app-cases/wave9/`. `RateLimiter` is newly re-exported from the
   crate root so the tests can reach it.
 
-### PR-3 / PR-4 (not started)
+### PR-3 Production Blockers (this PR)
+
+Closes the gaps PR-1/PR-2 left open. Full record: ADR-157–165;
+contract docs under `rust/app-cases/wave9/`;
+**`rust/RELEASE_BLOCKERS.md`** is the single registry of everything
+that still blocks cutover (each entry: what / why it blocks / what
+unblocks it / owner PR).
+
+- **Real email + SMS (ADR-158):** the Wave 2 stub is gone.
+  `mail.rs` sends for real — Resend HTTPS API preferred, SMTP
+  (STARTTLS, lettre) fallback, Kavenegar SMS — credentials only
+  from env (`RESEND_API_KEY`, `SMTP_*`, `SMS_API_KEY`); unset or
+  unreachable fails honestly (`Result<(), MailError>`), never a fake
+  success. Auth flows stay best-effort (token stored, failure logged,
+  resend works); the admin broadcast path now records the real
+  per-channel outcome instead of marking every attempted send
+  delivered. Verification/reset emails render real bodies from
+  `mail_templates.rs` (fa/ar/en copy, locale rule, `public_url`
+  validation) instead of empty strings. Mock-transport tests prove
+  request shape and error paths with no real network call; a real
+  delivery is a PR-4 staging proof (Release Blockers #1) — no live
+  Resend/Kavenegar key exists here.
+- **Sidecar contract hardened (ADR-159):** per-route timeouts
+  (fatwa ask 300 s, hifz ASR 300 s, voice 180 s, receipt 60 s;
+  `SIDECAR_TIMEOUT_SECS` overrides), per-route body caps (fatwa
+  1 MB, audio 32 MB — the Python-equivalent error codes), streaming
+  upstream bodies (SSE is no longer buffered), no retries (none of
+  these POSTs is idempotent). Contract:
+  `rust/app-cases/wave9/sidecar-contract.md`. Mock-sidecar tests
+  prove forward-on-success, honest 503s and SSE streaming; the real
+  sidecar pairing is PR-4 (Release Blockers #2).
+- **Python workers (ADR-160):** verified as far as locally possible
+  — real ARQ 0.28.0 + real Redis: a job enqueues with the real call
+  shape and is processed end-to-end for the media queue; the real
+  `app.core.queues` registry loads with the documented settings;
+  the real media startup gate runs and fails loud here (tesseract +
+  faster-whisper missing). The real `app.worker` processes are a
+  PR-4 staging proof (Release Blockers #3). Evidence:
+  `rust/app-cases/wave9/workers-verification.md`.
+- **Durable storage decided + implemented (ADR-162):**
+  **S3-compatible is the production provider** (local is dev/test
+  only) — decided by the product's own history (the 2026-11-19
+  receipt-image loss) and the original's storage policy. `storage.rs`
+  dispatches local vs S3 (SigV4 over reqwest); boot validation
+  (production fail-fast, ported from Python) refuses bad S3 config
+  instead of silently falling back to local. Migration procedure:
+  `rust/app-cases/wave9/storage-migration.md`. Bucket provisioning
+  + live round-trip + migration run are PR-4 (Release Blockers #4).
+- **Upload limits fixed (ADR-161) + avatar scan (ADR-164):** the axum 2 MB router default
+  was silently capping every upload above 2 MB (only donate/manual
+  had disabled it). The default is now disabled on exactly the
+  upload routes whose handler caps exceed 2 MB, so the ported Python
+  caps (library 512 MB / 5 MB, receipt/avatar/font 5 MB, audio
+  32 MB) are the real limits again — restored, not raised. The scan
+  gate (ADR-051) is unchanged — and the avatar upload, which still
+  carried the old ClamAV gate (503 in production, no daemon in the
+  deployment), now runs the same ADR-051 scanner (EICAR + blocklist,
+  422 `file_infected`); the scanner is extracted into one shared
+  module used by all four upload paths, and the dead
+  `CLAMAV_ALLOW_INSECURE_DEV_BYPASS` flag is removed.
+- **sqlx 0.8 → 0.9 (ADR-157):** sqlx 0.9.1 + libsqlite3-sys 0.40.0;
+  `rsa` gone from the tree; `cargo audit` exits 0 with **no
+  ignores** — both `--ignore` flags removed from `ci.yml`. The
+  upgrade's one breaking change (`SqlSafeStr`) is fixed at a single
+  audited choke point in `db.rs` (dynamic-SQL audit recorded there).
+- **Tests:** `rust/app/tests/wave9_pr3.rs` (24 tests: mock mail/SMS
+  transports, mock sidecar, SigV4 vectors + mock S3, upload-limit
+  proofs) + cases `pr3-01`–`pr3-04` under `rust/app-cases/wave9/`.
+  Full suite after PR-3: **363 passed, 0 failed across 19 binaries**
+  (339 pre-PR-3 + 24 new), fmt + clippy clean, `cargo audit` exits
+  0 with no ignores, `scripts/alembic-check.sh` PASS, release build
+  green. After the ADR-168 fix (spawn-time poller watermark +
+  `wave8_pg_smoke_poller_spawn_cutoff` regression test): **364
+  passed, 0 failed across 19 binaries** (363 + 1 new), full suite
+  re-verified sequentially with the exact CI pg_smoke loop green on
+  all 17 binaries. (One suite run during PR-3 failed every pg_smoke with
+  exactly 1 failure per binary — the cause was a VM replacement
+  that wiped Postgres; see TOOLS.md. The code was never at fault.)
+- **CI flake fix (ADR-165):** CI run #101 failed the `rust` job
+  twice in `rust/app/tests/wave8_lift.rs` (attempt #1
+  `wave8_pg_smoke`, attempt #2 `ws_resume_replay_from_query_and_live_message`)
+  — the outbox poller's 1 s tick can broadcast a live event frame
+  between the client's subscribe and the server's ack/replay/resumed,
+  and the tests read a single next frame. The resume test now waits
+  for the frame it expects (`wait_frame_type` / `wait_event_id`,
+  same shape as `wait_event`) and skips interleaved live frames;
+  assertions unchanged. Test-only fix; the poller/WS server are
+  untouched.
+- **CI flake fix 2 (ADR-166):** `wave8_pg_smoke` failed a third
+  time in CI (push run 45181799404 attempts #1 and #2 on HEAD
+  80f6056, same `"live event on pg"` panic; the PR run on the same
+  HEAD was all green and the ADR-165 test passed in the failing
+  run), so no third blind re-run: its live-event wait goes from
+  5 s to 15 s, justified by measurement (live event arrives
+  ~45 ms after the insert locally, max 47 ms over 5 runs) — 3x
+  the failing budget, ~330x local latency. Watermark-tie hazard
+  checked and ruled out; no src/ change.
+- **CI flake diagnosis (ADR-167):** the 15 s wait did NOT fix it —
+  `wave8_pg_smoke` failed a 4th and 5th time in CI (push
+  45204668807 + PR 45204683344 on HEAD a77db2c, both runs, same
+  panic). A diagnosis pass could not reproduce it locally (6/6
+  under full CPU saturation) and ruled out watermark tie,
+  heartbeat timeout, CPU load, unparseable frames, and wrong
+  DB/channel/visibility; the CI log shows the binary finished in
+  19.95 s (consistent with a ~5 s baseline + the full 15 s wait,
+  but not proof of a genuine timeout). `wait_event` collapsed
+  timeout / stream-close / unparseable-frame into one `None`, so
+  the failure mode was unobserved — it now logs which path fired
+  and after how long (plus the wait's elapsed time at the
+  `expect` site). Budgets and assertions unchanged; the budget
+  is never raised again as a fix — the next red run decides
+  between the poller-side and the WS-close-side investigation.
+- **CI flake fix 3 (ADR-168):** the 15 s wait did NOT fix it either —
+  `wave8_pg_smoke` failed again in CI on HEAD bf94882 (push run #115
+  + PR run #116, both runs, same panic) — but the temporary
+  `[poller-diag]` logging (one commit, reverted here) proved the
+  mechanism from the CI log: the poller's first run was 3.54 s after
+  spawn (locally 3.6 ms) and its watermark captured the test's own
+  `user.login` event, so all 286 ticks fetched the same 4 rows and
+  sent 0. The watermark was captured inside the spawned task, so a
+  first poll delayed past an insert drops that event forever. The
+  fix is in the binary: the cutoff is now the spawn instant
+  `(spawned_at, Uuid::nil())`, captured synchronously before
+  spawning — any row created after spawn is delivered even if the
+  first poll runs seconds late. The sentinel idea is not adopted
+  (it only moves the failure line). Proven by a deterministic
+  regression test (`wave8_pg_smoke_poller_spawn_cutoff`: block the
+  thread 2 s, insert from a second thread, assert delivery — fails
+  on the old code, passes with the fix). The regression test is the
+  file's second pg smoke, so both pg tests hold a tokio mutex for
+  their whole body — they share one DB and both drop/re-create the
+  schema. The temporary logging is
+  reverted in the same change.
+
+### PR-4 Staging Deployment (not started)
+
+PR-4 works through **`rust/RELEASE_BLOCKERS.md`** with evidence:
+new Railway project, independent Postgres + Redis, migrations on
+the test DB, sidecar + workers running, Rust deploy, cutover
+preflight, end-to-end tests, load test + FastAPI comparison,
+backup/restore + rollback test. Until the list is empty, no DNS,
+live domain, or real user traffic changes.
 
 ## Units (status)
 

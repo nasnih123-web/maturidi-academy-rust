@@ -16,9 +16,14 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-sqlx = { version = "0.8", features = ["any", "postgres", "sqlite", "runtime-tokio-rustls", "chrono", "uuid", "json"] }
+sqlx = { version = "0.9", features = ["any", "postgres", "sqlite", "runtime-tokio", "tls-rustls-ring", "chrono", "uuid", "json"] }
 redis = { version = "0.32", features = ["tokio-comp"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+bytes = "1"
+# Wave 9 PR-3 — real mail/SMS (ADR-158): lettre for SMTP, futures-util
+# for the sidecar forwarder's capped body read (routes_lift.rs).
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1", "tokio1-rustls", "rustls-tls", "builder"] }
+futures-util = "0.3"
 http = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -42,3 +47,6 @@ tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 tower = { version = "0.5", features = ["util"] }
 serde_json = "1"
+# Wave 9 PR-3 — the SSE streaming test builds its mock sidecar from
+# `futures_util::stream::unfold` (no async-stream crate).
+futures-util = "0.3"

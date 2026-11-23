@@ -40,7 +40,6 @@ use axum::{
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 use uuid::Uuid;
 
@@ -55,6 +54,7 @@ use crate::{
     routes_users::missing_profile_fields,
     settings::{encrypt_value, get_setting, get_typed_setting, stage_setting},
     storage::{presigned_url, put_object, SIGNED_PURPOSE_AVATAR},
+    upload_scan::{scan_upload, ScanAudit},
     validate::{parse_body, parse_datetime_str, parse_path_uuid, parse_query, query_int, req_dict},
     AppState,
 };
@@ -1114,62 +1114,6 @@ fn slugify_family(family: &str) -> String {
     }
 }
 
-const EICAR: &[u8] = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
-
-fn sha256_hex(data: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(data);
-    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// The ADR-051 scanner (SHA-256 blocklist + EICAR) applied to font
-/// uploads. Python scans with ClamAV; the Rust binary has none, so
-/// the same replacement gate the library uses applies here, with the
-/// font audit action (`admin.font_upload_rejected_infected`).
-async fn scan_font_upload(
-    db: &Db,
-    config: &crate::Config,
-    actor_id: Uuid,
-    data: &[u8],
-    filename: Option<&str>,
-    ip: Option<&str>,
-    user_agent: Option<&str>,
-) -> ApiResult<()> {
-    let mut signature: Option<&str> = None;
-    if data.len() >= EICAR.len() && data.windows(EICAR.len()).any(|w| w == EICAR) {
-        signature = Some("Eicar-Test-Signature");
-    } else if let Some(raw) = get_setting(db, config, "library.blocked_hashes").await? {
-        if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&raw) {
-            let hex = sha256_hex(data);
-            if items.iter().any(|v| v.as_str() == Some(hex.as_str())) {
-                signature = Some("blocked-hash");
-            }
-        }
-    }
-    if let Some(sig) = signature {
-        log_audit(
-            db,
-            Some(actor_id),
-            "admin",
-            "admin.font_upload_rejected_infected",
-            "platform_setting",
-            None,
-            None,
-            Some(json!({ "filename": filename, "signature": sig })),
-            ip,
-            user_agent,
-        )
-        .await?;
-        return Err(ApiError::with_details(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "file_infected",
-            "فایل به ویروس آلوده است و رد شد",
-            json!({ "signature": sig }),
-        ));
-    }
-    Ok(())
-}
-
 struct FontForm {
     locale: Option<String>,
     family: Option<String>,
@@ -1256,14 +1200,20 @@ pub async fn upload_font(
     let content = form
         .file_bytes
         .ok_or_else(|| validation_err("file", "field is required"))?;
-    scan_font_upload(
+    // Font uploads use the shared ADR-051 scanner (ADR-164).
+    scan_upload(
         db,
         &state.config,
-        ctx.user.id,
+        "admin.font_upload_rejected_infected",
+        "platform_setting",
+        ScanAudit {
+            actor_id: Some(ctx.user.id),
+            actor_type: "admin",
+            ip: ip.as_deref(),
+            user_agent: ua.as_deref(),
+        },
         &content,
         form.file_name.as_deref(),
-        ip.as_deref(),
-        ua.as_deref(),
     )
     .await?;
     let locale = form.locale.unwrap_or_default().trim().to_lowercase();
@@ -3016,7 +2966,11 @@ const CONNECTION_SERVICES: &[&str] = &["ai", "sms", "telegram", "payment", "maps
 
 fn channel_configured(key: &str) -> bool {
     match key {
-        "email" => !env_trimmed("SMTP_HOST").is_empty(),
+        // Resend counts as configured too: a Resend-only deploy
+        // sends fine while SMTP_HOST is empty (ADR-158).
+        "email" => {
+            !env_trimmed("RESEND_API_KEY").is_empty() || !env_trimmed("SMTP_HOST").is_empty()
+        }
         "sms" => !env_trimmed("SMS_API_KEY").is_empty(),
         "push" => false,
         "in_app" => true,
@@ -3183,13 +3137,23 @@ async fn test_sms(state: &AppState, params: &Value) -> ApiResult<Value> {
             "detail": "کلید پیامک پیکربندی نشده است",
         }));
     }
-    let _ = state;
-    send_sms(
+    // The connection test sends a real SMS and reports the real
+    // outcome — a failed send is `ok: false`, never a faked success
+    // (ADR-158).
+    match send_sms(
+        &state.config,
         &phone,
         "تست اتصال پیامک آکادمی ماتریدی — این پیام آزمایشی است.",
     )
-    .await;
-    Ok(json!({ "ok": true, "to": phone }))
+    .await
+    {
+        Ok(()) => Ok(json!({ "ok": true, "to": phone })),
+        Err(err) => Ok(json!({
+            "ok": false,
+            "error": "sms_delivery_failed",
+            "detail": crate::mail::redact_secrets(&err.to_string()),
+        })),
+    }
 }
 
 async fn test_telegram(state: &AppState, db: &Db, params: &Value) -> ApiResult<Value> {
@@ -3737,8 +3701,15 @@ pub async fn create_broadcast(
                 "email" => match &user.email {
                     None => (false, Some("no_email_address".to_string())),
                     Some(email) => {
-                        send_email(email, &title, &body_text, "").await;
-                        (true, None)
+                        // The delivery outcome is recorded, not
+                        // assumed (ADR-158): a failed send counts as
+                        // failed, with the (redacted) error.
+                        match send_email(&state.config, email, &title, &body_text, "").await {
+                            Ok(()) => (true, None),
+                            Err(err) => {
+                                (false, Some(crate::mail::redact_secrets(&err.to_string())))
+                            }
+                        }
                     }
                 },
                 "sms" => match &user.phone {
@@ -3746,8 +3717,12 @@ pub async fn create_broadcast(
                     Some(phone) => {
                         let text: String =
                             format!("{title}\n{body_text}").chars().take(500).collect();
-                        send_sms(phone, &text).await;
-                        (true, None)
+                        match send_sms(&state.config, phone, &text).await {
+                            Ok(()) => (true, None),
+                            Err(err) => {
+                                (false, Some(crate::mail::redact_secrets(&err.to_string())))
+                            }
+                        }
                     }
                 },
                 "push" => (false, Some("push_not_configured".to_string())),

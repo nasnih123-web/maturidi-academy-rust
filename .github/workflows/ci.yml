@@ -78,7 +78,7 @@ jobs:
         env:
           WAVE2_PG_URL: postgres://postgres:postgres@127.0.0.1:5432/maturidi_test
         run: |
-          for t in wave2 wave3 wave4 wave5 wave6 wave7_admin wave7_admin_content wave7_finance wave7_places_widgets wave7_social wave7_sync_telegram wave8 wave8_lift wave8_projects wave9_pr1 wave9_pr2; do
+          for t in wave2 wave3 wave4 wave5 wave6 wave7_admin wave7_admin_content wave7_finance wave7_places_widgets wave7_social wave7_sync_telegram wave8 wave8_lift wave8_projects wave9_pr1 wave9_pr2 wave9_pr3; do
             echo "=== $t ==="
             cargo test --test "$t" -- --test-threads=1 pg_smoke
           done
@@ -86,12 +86,12 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Cargo audit
         # Fails the run on any RUSTSEC advisory affecting this tree
-        # (cargo-audit's default), except the two named in ADR-152:
-        # RUSTSEC-2023-0071 (rsa via sqlx-mysql) and RUSTSEC-2026-0459
-        # (libsqlite3-sys) have no patch upgrade inside sqlx 0.8 — the
-        # fix needs a sqlx minor upgrade, tracked for PR-3. No other
-        # --ignore is granted: any new advisory fails the run.
-        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0459
+        # (cargo-audit's default). The two named ignores from ADR-152
+        # are gone: the sqlx 0.8 → 0.9 upgrade in Wave 9 PR-3
+        # (ADR-157) removed rsa from the tree and moved
+        # libsqlite3-sys to 0.40, so plain `cargo audit` exits 0.
+        # Any new advisory fails the run.
+        run: cargo audit
 
   redis:
     # Redis tests (ADR-154). A job of its own, so the Redis service is
