@@ -857,23 +857,34 @@ async fn fetch_recent_events(db: &Db, limit: usize) -> Vec<StoredEvent> {
     );
     let rows = match db.fetch_all(&sql, &[]).await {
         Ok(r) => r,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            // TEMPORARY diagnostic logging; revert after the CI log is read.
+            eprintln!("[poller-diag] fetch_recent_events ERROR limit={limit}: {e:?}");
+            return Vec::new();
+        }
     };
+    let row_count = rows.len();
     let mut events = Vec::new();
+    let mut skipped = 0usize;
     for row in rows {
         let Ok(event_id) = row.try_get::<Uuid, _>("event_id") else {
+            skipped += 1;
             continue;
         };
         let Ok(event_type) = row.try_get::<String, _>("event_type") else {
+            skipped += 1;
             continue;
         };
         let Ok(aggregate_type) = row.try_get::<String, _>("aggregate_type") else {
+            skipped += 1;
             continue;
         };
         let Ok(aggregate_id) = row.try_get::<String, _>("aggregate_id") else {
+            skipped += 1;
             continue;
         };
         let Ok(created_at) = row.try_get::<DateTime<Utc>, _>("created_at") else {
+            skipped += 1;
             continue;
         };
         let schema_version = row.try_get::<i32, _>("schema_version").unwrap_or(1) as i64;
@@ -892,6 +903,11 @@ async fn fetch_recent_events(db: &Db, limit: usize) -> Vec<StoredEvent> {
         });
     }
     events.reverse();
+    // TEMPORARY diagnostic logging; revert after the CI log is read.
+    eprintln!(
+        "[poller-diag] fetch_recent_events limit={limit} rows={row_count} parsed={} skipped={skipped}",
+        events.len()
+    );
     events
 }
 
@@ -913,22 +929,38 @@ pub fn spawn_realtime_poller(state: &AppState) {
     let hub = state.ws_hub.clone();
     let interval = Duration::from_secs_f64(state.config.dispatcher_poll_interval.max(0.05));
     tokio::spawn(async move {
+        // TEMPORARY diagnostic logging; revert after the CI log is read.
+        // All [poller-diag] lines in this task are temporary.
+        let spawned_at = tokio::time::Instant::now();
         let mut watermark: Option<(DateTime<Utc>, Uuid)> = None;
         if let Some(first) = fetch_recent_events(&db, 1).await.into_iter().last() {
             watermark = Some((first.created_at, first.event.event_id));
         }
+        eprintln!(
+            "[poller-diag] first run after {:?}: watermark={watermark:?}",
+            spawned_at.elapsed()
+        );
         loop {
             tokio::time::sleep(interval).await;
-            for stored in fetch_recent_events(&db, 200).await {
+            let fetched = fetch_recent_events(&db, 200).await;
+            let fetched_count = fetched.len();
+            let mut sent = 0usize;
+            let mut skipped = 0usize;
+            for stored in fetched {
                 let key = (stored.created_at, stored.event.event_id);
                 if let Some(wm) = watermark {
                     if key <= wm {
+                        skipped += 1;
                         continue;
                     }
                 }
                 watermark = Some(key);
                 let _ = hub.sender.send(stored.event);
+                sent += 1;
             }
+            eprintln!(
+                "[poller-diag] tick: fetched={fetched_count} sent={sent} skipped={skipped} watermark={watermark:?}"
+            );
         }
     });
 }
