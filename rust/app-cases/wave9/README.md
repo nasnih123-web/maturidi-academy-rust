@@ -1,10 +1,11 @@
-# Wave 9 PR-1 app-cases
+# Wave 9 app-cases
 
 HTTP request/response cases for the endpoints the cutover preflight's
 Step 7 probes (`scripts/cutover.sh`, `RUST_API_URL` set). Each file is
 one request with the expected status and the key response fields; they
 are documentation/fixture cases, not an executable suite — the
-executable coverage lives in `rust/app/tests/wave9_pr1.rs`.
+executable coverage lives in `rust/app/tests/wave9_pr1.rs` (PR-1) and
+`rust/app/tests/wave9_pr2.rs` (PR-2).
 
 - `pr1-01-health.json` — `GET /health` → 200 `{"status": "ok"}`.
 - `pr1-02-ready.json` — `GET /ready` → 200 `{"status": "ready", "db": "ok"}`.
@@ -23,3 +24,11 @@ executable coverage lives in `rust/app/tests/wave9_pr1.rs`.
 - `pr1-09-sidecar-503s.json` — `POST /api/v1/fatwa/ask` with `SIDECAR_URL`
   unset → 503 `fatwa_ask_unavailable`; the file also lists the other
   seven sidecar routes and their codes (ADR-134).
+
+PR-2 cases (ADR-149): `/ready` against live and dead Redis.
+
+- `pr2-01-ready-redis-ok.json` — `GET /ready` with a live Redis → 200
+  `{"status": "ready", "db": "ok", "redis": "ok"}`.
+- `pr2-02-ready-redis-unavailable.json` — `GET /ready` with a dead
+  Redis → still 200 `{"status": "ready", "db": "ok", "redis":
+  "unavailable"}` — Redis never fails readiness.

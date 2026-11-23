@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"pr2. /ready with a live Redis: 200 {status: ready, db: ok, redis: ok}","expected":{"db":"ok","redis":"ok","status":"ready"},"expected_status":200,"method":"GET","path":"/ready"}

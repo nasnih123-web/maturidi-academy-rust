@@ -1,0 +1,1 @@
+{"auth":"none","body":null,"case":"pr2. /ready with a dead Redis: still 200 {status: ready, db: ok, redis: unavailable} — Redis never fails readiness","expected":{"db":"ok","redis":"unavailable","status":"ready"},"expected_status":200,"method":"GET","path":"/ready"}
